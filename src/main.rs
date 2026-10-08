@@ -1,7 +1,9 @@
 use std::fs::File;
-use std::io::{BufReader, Seek, SeekFrom};
+use std::io::{BufReader, Seek};
 
-mod mp00;
+use crate::l0b_packet::{Decode, L0bPacket, L0bPacketType};
+
+mod l0b_packet;
 
 fn main() {
     let path = "data/HG1_003014_20260829_102905.l0b.ddm";
@@ -12,26 +14,41 @@ fn main() {
     let mut packet_number = 0;
 
     loop {
-        match mp00::Mp00::deserialize(&mut reader) {
-            Ok(packet) => {
+        let stream_position = reader.stream_position().unwrap();
+        match L0bPacket::decode(&mut reader) {
+            Ok(L0bPacket {
+                packet_preamble,
+                packet_type: L0bPacketType::Mp00(mp00),
+            }) => {
                 packet_number += 1;
 
                 println!("Packet {}", packet_number);
-                println!("  Packet offset: {:x}", reader.stream_position().unwrap());
-                println!("  Preamble: 0x{:08X}", packet.packet_preamble);
-                println!("  Packet Type: 0x{:08X}", packet.packet_type);
-                println!("  Header Version: {}", packet.header_version);
-                println!("  Channel: {}", packet.channel_num);
-                println!("  GPS Seconds: {}", packet.timestamp_seconds);
-                println!("  Sample Clocks: {}", packet.timestamp_clocks);
-                println!("  Pixels: {}", packet.pixel_data.len());
+                println!("  Packet offset: {:x}", stream_position);
+                println!("  Preamble: 0x{:08X}", packet_preamble);
+                println!("  Packet Type: MP00");
+                println!("  Header Version: {}", mp00.header_version);
+                println!("  Channel: {}", mp00.channel_num);
+                println!("  GPS Seconds: {}", mp00.timestamp_seconds);
+                println!("  Sample Clocks: {}", mp00.timestamp_clocks);
 
-                for pixels in packet.pixel_data.chunks(20) {
+                for pixels in mp00.pixel_data.chunks(20) {
                     for pixel in pixels {
                         print!("{pixel} ");
                     }
                     println!();
                 }
+            }
+
+            Ok(L0bPacket {
+                packet_preamble,
+                packet_type: L0bPacketType::Mt00(_),
+            }) => {
+                packet_number += 1;
+
+                println!("Packet {}", packet_number);
+                println!("  Packet offset: {:x}", stream_position);
+                println!("  Preamble: 0x{:08X}", packet_preamble);
+                println!("  Packet Type: MT00");
             }
 
             Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
@@ -43,9 +60,6 @@ fn main() {
                 eprintln!("Error reading packet {}: {}", packet_number + 1, e);
                 break;
             }
-        }
-        if packet_number == 135 {
-            reader.seek(SeekFrom::Current(4)).unwrap();
         }
     }
 
