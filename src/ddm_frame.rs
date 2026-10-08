@@ -1,10 +1,14 @@
+use serde::{Deserialize, Serialize};
+use serde_big_array::BigArray;
+
 use crate::l0b_packet::mp00::Mp00;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct DdmFrame {
     pub channel_num: u8,
     pub timestamp_seconds: u32,
     pub timestamp_clocks: i32,
+    #[serde(with = "BigArray")]
     pub pixel_data: [[u16; 20]; 52],
 }
 

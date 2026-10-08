@@ -1,7 +1,7 @@
-use std::io::{self, Read, Seek};
-
 pub mod mp00;
 pub mod mt00;
+
+use std::io::{self, Read, Seek};
 
 pub trait Decode: Sized {
     fn decode<R: Read + Seek>(reader: &mut R) -> Result<Self, std::io::Error>;
@@ -10,7 +10,6 @@ pub trait Decode: Sized {
 const MAGIC_MP00: u32 = u32::from_be_bytes(*b"MP00");
 const MAGIC_MT00: u32 = u32::from_be_bytes(*b"MT00");
 
-#[derive(Debug, Clone, PartialEq)]
 pub enum L0bPacketType {
     Mp00(mp00::Mp00),
     Mt00(mt00::Mt00),
