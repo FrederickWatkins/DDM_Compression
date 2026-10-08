@@ -1,15 +1,17 @@
 use super::Decode;
 use std::io::{self, Read, Seek, SeekFrom};
 
+const NUM_PIXELS: usize = 52 * 20;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Mp00 {
     pub header_version: u8,
     pub channel_num: u8,
     pub status_flag: u8,
-    pub pixel_quatisation: u8,
+    pub pixel_quantisation: u8,
     pub timestamp_seconds: u32,
     pub timestamp_clocks: i32,
-    pub pixel_data: Vec<u16>,
+    pub pixel_data: [u16; NUM_PIXELS],
 }
 
 impl Decode for Mp00 {
@@ -23,16 +25,14 @@ impl Decode for Mp00 {
         let header_version = header_buf[0];
         let channel_num = header_buf[1];
         let status_flag = header_buf[2];
-        let pixel_quatisation = header_buf[3];
+        let pixel_quantisation = header_buf[3];
         let timestamp_seconds = u32::from_be_bytes(header_buf[4..8].try_into().unwrap());
         let timestamp_clocks = i32::from_be_bytes(header_buf[8..12].try_into().unwrap());
 
-        const NUM_PIXELS: usize = 52 * 20;
-
-        let mut pixel_data = Vec::with_capacity(NUM_PIXELS);
+        let mut pixel_data = [0u16; NUM_PIXELS];
         let mut last_pixel: i32 = 0;
 
-        while pixel_data.len() < NUM_PIXELS {
+        for pixel in &mut pixel_data {
             let mut buf = [0u8; 1];
             reader.read_exact(&mut buf)?;
             let read_byte = buf[0];
@@ -68,8 +68,7 @@ impl Decode for Mp00 {
 
             last_pixel = delta_decoded;
 
-            let final_pixel = (delta_decoded << pixel_quatisation) as u16;
-            pixel_data.push(final_pixel);
+            *pixel = delta_decoded as u16;
         }
 
         let pos = reader.stream_position().unwrap();
@@ -89,7 +88,7 @@ impl Decode for Mp00 {
             header_version,
             channel_num,
             status_flag,
-            pixel_quatisation,
+            pixel_quantisation,
             timestamp_seconds,
             timestamp_clocks,
             pixel_data,

@@ -4,4 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+arcode = "0.2.4"
 ndarray = "0.16.1"
+osclet = "0.4.3"

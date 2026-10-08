@@ -1,7 +1,7 @@
 use std::io::{self, Read, Seek};
 
-mod mp00;
-mod mt00;
+pub mod mp00;
+pub mod mt00;
 
 pub trait Decode: Sized {
     fn decode<R: Read + Seek>(reader: &mut R) -> Result<Self, std::io::Error>;
