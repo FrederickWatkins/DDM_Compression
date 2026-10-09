@@ -42,11 +42,10 @@ impl eframe::App for DdmViewer {
             let frame_duration = std::time::Duration::from_secs_f32(1.0 / self.fps);
 
             if self.last_frame_time.elapsed() >= frame_duration {
-                if let Some(frames) = self.frames.get(self.outer_index) {
-                    if !frames.is_empty() {
+                if let Some(frames) = self.frames.get(self.outer_index)
+                    && !frames.is_empty() {
                         self.inner_index = (self.inner_index + 1) % frames.len();
                     }
-                }
 
                 self.last_frame_time = std::time::Instant::now();
             }
@@ -72,7 +71,7 @@ impl eframe::App for DdmViewer {
                 // Outer index
                 ui.add(
                     egui::Slider::new(&mut self.outer_index, 0..=self.frames.len() - 1)
-                        .text("Frame"),
+                        .text("Channel"),
                 );
 
                 let inner_len = self.frames[self.outer_index].len();
@@ -86,7 +85,7 @@ impl eframe::App for DdmViewer {
                 self.inner_index = self.inner_index.min(inner_len - 1);
 
                 // Inner index
-                ui.add(egui::Slider::new(&mut self.inner_index, 0..=inner_len - 1).text("Channel"));
+                ui.add(egui::Slider::new(&mut self.inner_index, 0..=inner_len - 1).text("Frame"));
 
                 ui.separator();
 
