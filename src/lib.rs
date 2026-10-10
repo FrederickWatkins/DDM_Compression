@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+#![warn(clippy::pedantic)]
 
 pub mod ddm_frame;
 pub mod decorrelation;

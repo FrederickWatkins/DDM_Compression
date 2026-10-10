@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 anyhow = "1.0.104"
 bincode = { version = "2", features = ["serde"] }
+cabac = "0.15.0"
 clap = { version = "4.6.7", features = ["derive"] }
 comfy-table = "8.0.1"
 constriction = "0.5.0"
