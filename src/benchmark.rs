@@ -572,7 +572,15 @@ fn benchmark_waveletbp_cabac(data: Array3<u16>) -> anyhow::Result<usize> {
     }
 }
 
-fn time_wavelet_code(data: &Array3<u16>) -> anyhow::Result<Array3<i32>> {
+fn zigzag_encode(value: i32) -> u32 {
+    ((value << 1) ^ (value >> 31)) as u32
+}
+
+fn zigzag_decode(value: u32) -> i32 {
+    ((value >> 1) as i32) ^ -((value & 1) as i32)
+}
+
+fn time_wavelet_code(data: &Array3<u16>) -> anyhow::Result<Array3<u32>> {
     let temporal = time_code(data);
     let mut transformed = temporal.mapv(|x| x as i32);
 
@@ -581,15 +589,19 @@ fn time_wavelet_code(data: &Array3<u16>) -> anyhow::Result<Array3<i32>> {
     dwt53_axis(&mut transformed, ndarray::Axis(2))
         .map_err(|e| anyhow!("{e:?}"))?;
 
-    Ok(transformed)
+    let coefficients = transformed.map(|&x| zigzag_encode(x));
+
+    Ok(coefficients)
 }
 
 fn inverse_time_wavelet_code(
-    transformed: &mut Array3<i32>,
+    transformed: &Array3<u32>,
 ) -> anyhow::Result<Array3<u16>> {
-    idwt53_axis(transformed, ndarray::Axis(2))
+    let mut transformed = transformed.mapv(|x| zigzag_decode(x));
+
+    idwt53_axis(&mut transformed, ndarray::Axis(2))
         .map_err(|e| anyhow!("{e:?}"))?;
-    idwt53_axis(transformed, ndarray::Axis(1))
+    idwt53_axis(&mut transformed, ndarray::Axis(1))
         .map_err(|e| anyhow!("{e:?}"))?;
 
     let temporal = transformed.mapv(|x| x as i16);
@@ -643,15 +655,11 @@ fn benchmark_time_wavelet_zst(data: Array3<u16>) -> anyhow::Result<usize> {
 
     let decompressed = zstd::decode_all(&compressed[..])?;
 
-    if decompressed.len() != transformed.len() * size_of::<i32>() {
-        return Err(anyhow!("invalid time_wavelet_zst decompressed length"));
-    }
-
-    let values: Vec<i32> = decompressed
+    let values: Vec<u32> = decompressed
         .as_chunks::<4>()
         .0
         .iter()
-        .map(|chunk| i32::from_le_bytes(*chunk))
+        .map(|chunk| u32::from_le_bytes(*chunk))
         .collect();
 
     let mut decoded = Array3::from_shape_vec(transformed.dim(), values)
@@ -670,7 +678,7 @@ fn benchmark_time_wavelet_cabac(
     data: Array3<u16>,
 ) -> anyhow::Result<usize> {
     let transformed = time_wavelet_code(&data)?;
-
+    println!("Min: {}, max: {}", transformed.iter().min().unwrap(), transformed.iter().max().unwrap());
     let model = cabac_model_from_array(&transformed);
     let compressed = cabac_compress_array(&transformed, &model);
     let data_size = compressed.len();
