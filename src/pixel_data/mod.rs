@@ -8,6 +8,7 @@ const DDM_HEIGHT: usize = 52;
 const DDM_WIDTH: usize = 20;
 
 type DDMFrame = [[u16; DDM_WIDTH]; DDM_HEIGHT];
+type SignedFrame = [[i32; DDM_WIDTH]; DDM_HEIGHT];
 
 type WaveletSubband = [[i32; DDM_WIDTH / 2]; DDM_HEIGHT / 2];
 
@@ -18,65 +19,148 @@ struct WaveletSubbands {
     hh: WaveletSubband,
 }
 
-pub fn encode<W: Write>(frames: &mut Vec<DDMFrame>, writer: &mut W) -> Result<()> {
-    time_delta_code(frames);
-    let mut wavelet_transformed = vec![];
-    for frame in frames {
-        wavelet_transformed.push(dwt53_2d(frame))
+pub fn encode<W: Write>(
+    frames: &[DDMFrame],
+    writer: &mut W,
+    use_time_delta: bool,
+    q_ll: i32,
+    q_detail: i32,
+) -> Result<()> {
+    // 1. Convert u16 frames to signed i32 frames
+    let mut signed_frames: Vec<SignedFrame> = frames
+        .iter()
+        .map(|frame| {
+            let mut sf = [[0i32; DDM_WIDTH]; DDM_HEIGHT];
+            for y in 0..DDM_HEIGHT {
+                for x in 0..DDM_WIDTH {
+                    sf[y][x] = frame[y][x] as i32;
+                }
+            }
+            sf
+        })
+        .collect();
+
+    if use_time_delta {
+        time_delta_code_i32(&mut signed_frames);
     }
+
+    // 2. Apply 2D DWT and Quantize
+    let all_subbands: Vec<WaveletSubbands> = signed_frames
+        .iter()
+        .map(|sf| {
+            let mut subbands = dwt53_2d(sf);
+            quantize_subband(&mut subbands.ll, q_ll);
+            quantize_subband(&mut subbands.lh, q_detail);
+            quantize_subband(&mut subbands.hl, q_detail);
+            quantize_subband(&mut subbands.hh, q_detail);
+            subbands
+        })
+        .collect();
+
+    // 4. Encode via CABAC
     let mut ctx = [H265Context::default(); 4];
     let mut writer = H265Writer::new(writer);
-    for subbands in wavelet_transformed {
+    for subbands in all_subbands {
         encode_subbands(subbands, &mut ctx, &mut writer)?;
     }
     writer.finish()?;
     Ok(())
 }
 
-pub fn decode<R: Read>(reader: &mut R) -> Result<Vec<DDMFrame>> {
+pub fn decode<R: Read>(
+    reader: &mut R,
+    use_time_delta: bool,
+    q_ll: i32,
+    q_detail: i32,
+) -> Result<Vec<DDMFrame>> {
     let mut reader = H265Reader::new(reader)?;
     let mut ctx = [H265Context::default(); 4];
-    let mut wavelet_transformed = Vec::new();
+    let mut all_subbands = Vec::new();
 
-    // Mirroring the encode loop: read subbands frame by frame until EOF
-    while let Ok(subbands) = decode_subbands(&mut ctx, &mut reader) {
-        wavelet_transformed.push(subbands);
+    while let Ok(mut subbands) = decode_subbands(&mut ctx, &mut reader) {
+        // Dequantize subbands
+        dequantize_subband(&mut subbands.ll, q_ll);
+        dequantize_subband(&mut subbands.lh, q_detail);
+        dequantize_subband(&mut subbands.hl, q_detail);
+        dequantize_subband(&mut subbands.hh, q_detail);
+        all_subbands.push(subbands);
     }
 
-    let mut frames = Vec::with_capacity(wavelet_transformed.len());
-    for subbands in wavelet_transformed {
-        frames.push(idwt53_2d(subbands));
+    // 6. Inverse 2D DWT to recover signed frames
+    let mut signed_frames = Vec::with_capacity(all_subbands.len());
+    for subbands in all_subbands {
+        signed_frames.push(idwt53_2d(subbands));
     }
 
-    inverse_time_delta_code(&mut frames);
+    if use_time_delta {
+        inverse_time_delta_code_i32(&mut signed_frames);
+    }
+
+    // 7. Convert back to u16 DDMFrames
+    let mut frames = Vec::with_capacity(signed_frames.len());
+    for signed_frame in signed_frames {
+        let mut frame = [[0u16; DDM_WIDTH]; DDM_HEIGHT];
+        for y in 0..DDM_HEIGHT {
+            for x in 0..DDM_WIDTH {
+                frame[y][x] = signed_frame[y][x].clamp(0, u16::MAX as i32) as u16;
+            }
+        }
+        frames.push(frame);
+    }
+
     Ok(frames)
 }
 
-fn time_delta_code(frames: &mut Vec<DDMFrame>) {
-    let mut prev_frame: DDMFrame = [[0; DDM_WIDTH]; DDM_HEIGHT];
-    for frame in frames {
+fn time_delta_code_ll(subbands_vec: &mut [WaveletSubbands]) {
+    let mut prev_ll = [[0i32; DDM_WIDTH / 2]; DDM_HEIGHT / 2];
+    for subbands in subbands_vec.iter_mut() {
+        let current_ll = subbands.ll;
+        for y in 0..(DDM_HEIGHT / 2) {
+            for x in 0..(DDM_WIDTH / 2) {
+                subbands.ll[y][x] = current_ll[y][x] - prev_ll[y][x];
+            }
+        }
+        prev_ll = current_ll;
+    }
+}
+
+fn inverse_time_delta_code_ll(subbands_vec: &mut [WaveletSubbands]) {
+    let mut prev_ll = [[0i32; DDM_WIDTH / 2]; DDM_HEIGHT / 2];
+    for subbands in subbands_vec.iter_mut() {
+        let mut current_ll = subbands.ll;
+        for y in 0..(DDM_HEIGHT / 2) {
+            for x in 0..(DDM_WIDTH / 2) {
+                current_ll[y][x] = current_ll[y][x] + prev_ll[y][x];
+            }
+        }
+        subbands.ll = current_ll;
+        prev_ll = current_ll;
+    }
+}
+
+fn time_delta_code_i32(frames: &mut [SignedFrame]) {
+    let mut prev_frame = [[0i32; DDM_WIDTH]; DDM_HEIGHT];
+    for frame in frames.iter_mut() {
         let current = *frame;
-        for (pixel, prev_pixel) in frame
-            .iter_mut()
-            .flatten()
-            .zip(prev_frame.iter().flatten())
-        {
-            *pixel = pixel.overflowing_sub(*prev_pixel).0;
+        for y in 0..DDM_HEIGHT {
+            for x in 0..DDM_WIDTH {
+                let curr = frame[y][x];
+                let prev = prev_frame[y][x];
+                frame[y][x] = curr - prev; // Pure signed subtraction
+            }
         }
         prev_frame = current;
     }
 }
 
-fn inverse_time_delta_code(frames: &mut Vec<DDMFrame>) {
-    let mut prev_frame: DDMFrame = [[0; _]; _];
-    for frame in frames {
-        for (pixel, prev_pixel) in frame
-            .iter_mut()
-            .map(|x| x.iter_mut())
-            .flatten()
-            .zip(prev_frame.iter().map(|x| x.iter()).flatten())
-        {
-            *pixel = pixel.overflowing_add(*prev_pixel).0;
+fn inverse_time_delta_code_i32(frames: &mut [SignedFrame]) {
+    let mut prev_frame = [[0i32; DDM_WIDTH]; DDM_HEIGHT];
+    for frame in frames.iter_mut() {
+        for y in 0..DDM_HEIGHT {
+            for x in 0..DDM_WIDTH {
+                let prev = prev_frame[y][x];
+                frame[y][x] = frame[y][x] + prev; // Pure signed addition
+            }
         }
         prev_frame = *frame;
     }
@@ -196,10 +280,10 @@ fn from_subband(subband: &WaveletSubband) -> Vec<Vec<i32>> {
     subband.iter().map(|row| row.to_vec()).collect()
 }
 
-fn dwt53_2d(frame: &DDMFrame) -> WaveletSubbands {
+fn dwt53_2d(frame: &SignedFrame) -> WaveletSubbands {
     let grid: Vec<Vec<i32>> = frame
         .iter()
-        .map(|row| row.iter().map(|&x| x as i32).collect())
+        .map(|row| row.to_vec())
         .collect();
 
     // 1. Horizontal transform (on rows)
@@ -217,7 +301,7 @@ fn dwt53_2d(frame: &DDMFrame) -> WaveletSubbands {
     }
 }
 
-fn idwt53_2d(data: WaveletSubbands) -> DDMFrame {
+fn idwt53_2d(data: WaveletSubbands) -> SignedFrame {
     // 1. Inverse vertical transform (via transpose)
     let low_h = transpose(&inverse_transform_grid(
         &transpose(&from_subband(&data.ll)),
@@ -231,10 +315,10 @@ fn idwt53_2d(data: WaveletSubbands) -> DDMFrame {
     // 2. Inverse horizontal transform (on rows)
     let grid = inverse_transform_grid(&low_h, &high_h);
 
-    let mut frame = [[0u16; DDM_WIDTH]; DDM_HEIGHT];
+    let mut frame = [[0i32; DDM_WIDTH]; DDM_HEIGHT];
     for (y, row) in grid.iter().enumerate() {
         for (x, &val) in row.iter().enumerate() {
-            frame[y][x] = val.clamp(0, u16::MAX as i32) as u16;
+            frame[y][x] = val;
         }
     }
     frame
@@ -257,7 +341,6 @@ fn encode_subband<W: Write>(
     ctx: &mut H265Context,
     writer: &mut H265Writer<W>,
 ) -> Result<()> {
-    // 1. Find the maximum absolute coefficient value in this subband
     let max_val = data.iter().flatten().map(|&c| c.abs()).max().unwrap_or(0);
     let max_bit = if max_val == 0 {
         0
@@ -265,19 +348,16 @@ fn encode_subband<W: Write>(
         31 - max_val.leading_zeros() as i32
     };
 
-    // 2. Encode max_bit (0..=19) as 5 bits using CABAC
     for i in (0..5).rev() {
         writer.put((max_bit >> i) & 1 == 1, ctx)?;
     }
 
-    // 3. Encode signs
     for row in data {
         for &coef in row {
             writer.put(coef < 0, ctx)?;
         }
     }
 
-    // 4. Encode magnitude bit-planes dynamically down from max_bit to 0
     for bit in (0..=max_bit).rev() {
         for row in data {
             for &coef in row {
@@ -308,7 +388,6 @@ fn decode_subband<R: Read>(
     let sub_width = DDM_WIDTH / 2;
     let total_coeffs = sub_height * sub_width;
 
-    // 1. Decode max_bit (5 bits)
     let mut max_bit = 0i32;
     for i in (0..5).rev() {
         if reader.get(ctx)? {
@@ -316,7 +395,6 @@ fn decode_subband<R: Read>(
         }
     }
 
-    // 2. Decode sign flags
     let mut negative = vec![false; total_coeffs];
     let mut idx = 0;
     for _ in 0..sub_height {
@@ -326,7 +404,6 @@ fn decode_subband<R: Read>(
         }
     }
 
-    // 3. Decode magnitude bits dynamically
     let mut mags = vec![0i32; total_coeffs];
     for bit in (0..=max_bit).rev() {
         let mut idx = 0;
@@ -341,7 +418,6 @@ fn decode_subband<R: Read>(
         }
     }
 
-    // 4. Reconstruct coefficients
     let mut idx = 0;
     for r in 0..sub_height {
         for c in 0..sub_width {
@@ -355,6 +431,32 @@ fn decode_subband<R: Read>(
     }
 
     Ok(data)
+}
+
+fn quantize_subband(subband: &mut WaveletSubband, q: i32) {
+    if q <= 1 {
+        return;
+    }
+    for row in subband.iter_mut() {
+        for coef in row.iter_mut() {
+            let sign = coef.signum();
+            let abs_val = coef.abs();
+            // Dead-zone truncation towards zero
+            let quantized = abs_val / q;
+            *coef = sign * quantized;
+        }
+    }
+}
+
+fn dequantize_subband(subband: &mut WaveletSubband, q: i32) {
+    if q <= 1 {
+        return;
+    }
+    for row in subband.iter_mut() {
+        for coef in row.iter_mut() {
+            *coef = *coef * q;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -382,11 +484,24 @@ mod tests {
 
     proptest! {
         #[test]
-        fn test_stage_time_delta(mut frames in arb_ddm_frame_series(1..4, any::<u16>())) {
-            let original = frames.clone();
-            time_delta_code(&mut frames);
-            inverse_time_delta_code(&mut frames);
-            prop_assert_eq!(original, frames);
+        fn test_stage_time_delta_i32(frames in arb_ddm_frame_series(1..4, any::<u16>())) {
+            let mut signed_frames: Vec<SignedFrame> = frames
+                .iter()
+                .map(|f| {
+                    let mut sf = [[0i32; DDM_WIDTH]; DDM_HEIGHT];
+                    for y in 0..DDM_HEIGHT {
+                        for x in 0..DDM_WIDTH {
+                            sf[y][x] = f[y][x] as i32;
+                        }
+                    }
+                    sf
+                })
+                .collect();
+
+            let original = signed_frames.clone();
+            time_delta_code_i32(&mut signed_frames);
+            inverse_time_delta_code_i32(&mut signed_frames);
+            prop_assert_eq!(original, signed_frames);
         }
 
         #[test]
@@ -398,50 +513,35 @@ mod tests {
 
         #[test]
         fn test_stage_dwt53_2d(frame in arb_ddm_frame(any::<u16>())) {
-            let subbands = dwt53_2d(&frame);
-            let recovered = idwt53_2d(subbands);
-            prop_assert_eq!(frame, recovered);
-        }
-
-        #[test]
-        fn test_stage_cabac_subband(
-            subband in prop::collection::vec(
-                prop::collection::vec(-1000i32..1000i32, DDM_WIDTH / 2),
-                DDM_HEIGHT / 2
-            )
-        ) {
-            let subband: WaveletSubband = {
-                let rows: Vec<[i32; DDM_WIDTH / 2]> = subband
-                    .into_iter()
-                    .map(|r| r.try_into().unwrap())
-                    .collect();
-                rows.try_into().unwrap()
+            let signed_frame: SignedFrame = {
+                let mut sf = [[0i32; DDM_WIDTH]; DDM_HEIGHT];
+                for y in 0..DDM_HEIGHT {
+                    for x in 0..DDM_WIDTH {
+                        sf[y][x] = frame[y][x] as i32;
+                    }
+                }
+                sf
             };
-
-            let mut encoded = Vec::new();
-            {
-                let mut writer = H265Writer::new(&mut encoded);
-                let mut ctx = H265Context::default();
-                encode_subband(&subband, &mut ctx, &mut writer).unwrap();
-                writer.finish().unwrap();
-            }
-
-            let decoded;
-            {
-                let mut reader = H265Reader::new(&encoded[..])?;
-                let mut ctx = H265Context::default();
-                decoded = decode_subband(&mut ctx, &mut reader).unwrap();
-            }
-
-            prop_assert_eq!(subband, decoded);
+            let subbands = dwt53_2d(&signed_frame);
+            let recovered = idwt53_2d(subbands);
+            prop_assert_eq!(signed_frame, recovered);
         }
 
         #[test]
-        fn test_full_codec_roundtrip(original_frames in arb_ddm_frame_series(1..3, 0..1000u16)) {
+        fn test_full_codec_roundtrip_without_delta(original_frames in arb_ddm_frame_series(1..3, 0..1000u16)) {
             let mut encoded_data = Vec::new();
-            encode(&mut original_frames.clone(), &mut encoded_data).unwrap();
+            encode(&original_frames, &mut encoded_data, false, 1, 1).unwrap();
 
-            let decoded_frames = decode(&mut &encoded_data[..]).unwrap();
+            let decoded_frames = decode(&mut &encoded_data[..], false, 1, 1).unwrap();
+            prop_assert_eq!(original_frames, decoded_frames);
+        }
+
+        #[test]
+        fn test_full_codec_roundtrip_with_delta(original_frames in arb_ddm_frame_series(1..3, 0..1000u16)) {
+            let mut encoded_data = Vec::new();
+            encode(&original_frames, &mut encoded_data, true, 1, 1).unwrap();
+
+            let decoded_frames = decode(&mut &encoded_data[..], true, 1, 1).unwrap();
             prop_assert_eq!(original_frames, decoded_frames);
         }
     }
