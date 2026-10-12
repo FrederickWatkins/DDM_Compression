@@ -1,7 +1,6 @@
 use std::io::{Read, Write};
 
 use anyhow::Result;
-use bitstream_io::{BitRead, BitWrite};
 use cabac::{CabacReader, CabacWriter, h265::*};
 
 const DDM_HEIGHT: usize = 52;
@@ -22,12 +21,11 @@ struct WaveletSubbands {
 pub fn encode<W: Write>(
     frames: &[DDMFrame],
     writer: &mut W,
-    use_time_delta: bool,
     q_ll: i32,
     q_detail: i32,
 ) -> Result<()> {
     // 1. Convert u16 frames to signed i32 frames
-    let mut signed_frames: Vec<SignedFrame> = frames
+    let signed_frames: Vec<SignedFrame> = frames
         .iter()
         .map(|frame| {
             let mut sf = [[0i32; DDM_WIDTH]; DDM_HEIGHT];
@@ -39,10 +37,6 @@ pub fn encode<W: Write>(
             sf
         })
         .collect();
-
-    if use_time_delta {
-        time_delta_code_i32(&mut signed_frames);
-    }
 
     // 2. Apply 2D DWT and Quantize
     let all_subbands: Vec<WaveletSubbands> = signed_frames
@@ -57,7 +51,7 @@ pub fn encode<W: Write>(
         })
         .collect();
 
-    // 4. Encode via CABAC
+    // 3. Encode via CABAC
     let mut ctx = [H265Context::default(); 4];
     let mut writer = H265Writer::new(writer);
     for subbands in all_subbands {
@@ -69,7 +63,6 @@ pub fn encode<W: Write>(
 
 pub fn decode<R: Read>(
     reader: &mut R,
-    use_time_delta: bool,
     q_ll: i32,
     q_detail: i32,
 ) -> Result<Vec<DDMFrame>> {
@@ -86,17 +79,13 @@ pub fn decode<R: Read>(
         all_subbands.push(subbands);
     }
 
-    // 6. Inverse 2D DWT to recover signed frames
+    // 4. Inverse 2D DWT to recover signed frames
     let mut signed_frames = Vec::with_capacity(all_subbands.len());
     for subbands in all_subbands {
         signed_frames.push(idwt53_2d(subbands));
     }
 
-    if use_time_delta {
-        inverse_time_delta_code_i32(&mut signed_frames);
-    }
-
-    // 7. Convert back to u16 DDMFrames
+    // 5. Convert back to u16 DDMFrames
     let mut frames = Vec::with_capacity(signed_frames.len());
     for signed_frame in signed_frames {
         let mut frame = [[0u16; DDM_WIDTH]; DDM_HEIGHT];
@@ -111,61 +100,6 @@ pub fn decode<R: Read>(
     Ok(frames)
 }
 
-fn time_delta_code_ll(subbands_vec: &mut [WaveletSubbands]) {
-    let mut prev_ll = [[0i32; DDM_WIDTH / 2]; DDM_HEIGHT / 2];
-    for subbands in subbands_vec.iter_mut() {
-        let current_ll = subbands.ll;
-        for y in 0..(DDM_HEIGHT / 2) {
-            for x in 0..(DDM_WIDTH / 2) {
-                subbands.ll[y][x] = current_ll[y][x] - prev_ll[y][x];
-            }
-        }
-        prev_ll = current_ll;
-    }
-}
-
-fn inverse_time_delta_code_ll(subbands_vec: &mut [WaveletSubbands]) {
-    let mut prev_ll = [[0i32; DDM_WIDTH / 2]; DDM_HEIGHT / 2];
-    for subbands in subbands_vec.iter_mut() {
-        let mut current_ll = subbands.ll;
-        for y in 0..(DDM_HEIGHT / 2) {
-            for x in 0..(DDM_WIDTH / 2) {
-                current_ll[y][x] = current_ll[y][x] + prev_ll[y][x];
-            }
-        }
-        subbands.ll = current_ll;
-        prev_ll = current_ll;
-    }
-}
-
-fn time_delta_code_i32(frames: &mut [SignedFrame]) {
-    let mut prev_frame = [[0i32; DDM_WIDTH]; DDM_HEIGHT];
-    for frame in frames.iter_mut() {
-        let current = *frame;
-        for y in 0..DDM_HEIGHT {
-            for x in 0..DDM_WIDTH {
-                let curr = frame[y][x];
-                let prev = prev_frame[y][x];
-                frame[y][x] = curr - prev; // Pure signed subtraction
-            }
-        }
-        prev_frame = current;
-    }
-}
-
-fn inverse_time_delta_code_i32(frames: &mut [SignedFrame]) {
-    let mut prev_frame = [[0i32; DDM_WIDTH]; DDM_HEIGHT];
-    for frame in frames.iter_mut() {
-        for y in 0..DDM_HEIGHT {
-            for x in 0..DDM_WIDTH {
-                let prev = prev_frame[y][x];
-                frame[y][x] = frame[y][x] + prev; // Pure signed addition
-            }
-        }
-        prev_frame = *frame;
-    }
-}
-
 fn dwt53(arr: &[i32]) -> (Vec<i32>, Vec<i32>) {
     let n = arr.len();
     if n == 0 {
@@ -178,14 +112,12 @@ fn dwt53(arr: &[i32]) -> (Vec<i32>, Vec<i32>) {
     let mut even: Vec<i32> = arr.iter().step_by(2).copied().collect();
     let mut odd: Vec<i32> = arr.iter().skip(1).step_by(2).copied().collect();
 
-    // Predict step
     for i in 0..odd.len() {
         let left = even[i];
         let right = if i + 1 < even.len() { even[i + 1] } else { even[i] };
         odd[i] -= (left + right) / 2;
     }
 
-    // Update step
     for i in 0..even.len() {
         let left_d = if i > 0 { odd[i - 1] } else { odd[0] };
         let right_d = if i < odd.len() { odd[i] } else { odd[odd.len() - 1] };
@@ -206,21 +138,18 @@ fn idwt53(low: &[i32], high: &[i32]) -> Vec<i32> {
         return even;
     }
 
-    // Undo update step
     for i in 0..even.len() {
         let left_d = if i > 0 { odd[i - 1] } else { odd[0] };
         let right_d = if i < odd.len() { odd[i] } else { odd[odd.len() - 1] };
         even[i] -= (left_d + right_d + 2) / 4;
     }
 
-    // Undo predict step
     for i in 0..odd.len() {
         let left = even[i];
         let right = if i + 1 < even.len() { even[i + 1] } else { even[i] };
         odd[i] += (left + right) / 2;
     }
 
-    // Interleave
     let mut res = Vec::with_capacity(even.len() + odd.len());
     let mut ev_it = even.into_iter();
     let mut od_it = odd.into_iter();
@@ -281,15 +210,9 @@ fn from_subband(subband: &WaveletSubband) -> Vec<Vec<i32>> {
 }
 
 fn dwt53_2d(frame: &SignedFrame) -> WaveletSubbands {
-    let grid: Vec<Vec<i32>> = frame
-        .iter()
-        .map(|row| row.to_vec())
-        .collect();
+    let grid: Vec<Vec<i32>> = frame.iter().map(|row| row.to_vec()).collect();
 
-    // 1. Horizontal transform (on rows)
     let (low_h, high_h) = transform_grid(&grid);
-
-    // 2. Vertical transform (on columns, handled cleanly by transposing first)
     let (ll_t, lh_t) = transform_grid(&transpose(&low_h));
     let (hl_t, hh_t) = transform_grid(&transpose(&high_h));
 
@@ -302,7 +225,6 @@ fn dwt53_2d(frame: &SignedFrame) -> WaveletSubbands {
 }
 
 fn idwt53_2d(data: WaveletSubbands) -> SignedFrame {
-    // 1. Inverse vertical transform (via transpose)
     let low_h = transpose(&inverse_transform_grid(
         &transpose(&from_subband(&data.ll)),
         &transpose(&from_subband(&data.lh)),
@@ -312,7 +234,6 @@ fn idwt53_2d(data: WaveletSubbands) -> SignedFrame {
         &transpose(&from_subband(&data.hh)),
     ));
 
-    // 2. Inverse horizontal transform (on rows)
     let grid = inverse_transform_grid(&low_h, &high_h);
 
     let mut frame = [[0i32; DDM_WIDTH]; DDM_HEIGHT];
@@ -441,7 +362,6 @@ fn quantize_subband(subband: &mut WaveletSubband, q: i32) {
         for coef in row.iter_mut() {
             let sign = coef.signum();
             let abs_val = coef.abs();
-            // Dead-zone truncation towards zero
             let quantized = abs_val / q;
             *coef = sign * quantized;
         }
@@ -483,26 +403,6 @@ mod tests {
     }
 
     proptest! {
-        #[test]
-        fn test_stage_time_delta_i32(frames in arb_ddm_frame_series(1..4, any::<u16>())) {
-            let mut signed_frames: Vec<SignedFrame> = frames
-                .iter()
-                .map(|f| {
-                    let mut sf = [[0i32; DDM_WIDTH]; DDM_HEIGHT];
-                    for y in 0..DDM_HEIGHT {
-                        for x in 0..DDM_WIDTH {
-                            sf[y][x] = f[y][x] as i32;
-                        }
-                    }
-                    sf
-                })
-                .collect();
-
-            let original = signed_frames.clone();
-            time_delta_code_i32(&mut signed_frames);
-            inverse_time_delta_code_i32(&mut signed_frames);
-            prop_assert_eq!(original, signed_frames);
-        }
 
         #[test]
         fn test_stage_dwt53_1d(arr in prop::collection::vec((u16::MIN as i32)..(u16::MAX as i32), 2..30)) {
@@ -530,18 +430,18 @@ mod tests {
         #[test]
         fn test_full_codec_roundtrip_without_delta(original_frames in arb_ddm_frame_series(1..3, 0..1000u16)) {
             let mut encoded_data = Vec::new();
-            encode(&original_frames, &mut encoded_data, false, 1, 1).unwrap();
+            encode(&original_frames, &mut encoded_data, 1, 1).unwrap();
 
-            let decoded_frames = decode(&mut &encoded_data[..], false, 1, 1).unwrap();
+            let decoded_frames = decode(&mut &encoded_data[..], 1, 1).unwrap();
             prop_assert_eq!(original_frames, decoded_frames);
         }
 
         #[test]
         fn test_full_codec_roundtrip_with_delta(original_frames in arb_ddm_frame_series(1..3, 0..1000u16)) {
             let mut encoded_data = Vec::new();
-            encode(&original_frames, &mut encoded_data, true, 1, 1).unwrap();
+            encode(&original_frames, &mut encoded_data, 1, 1).unwrap();
 
-            let decoded_frames = decode(&mut &encoded_data[..], true, 1, 1).unwrap();
+            let decoded_frames = decode(&mut &encoded_data[..], 1, 1).unwrap();
             prop_assert_eq!(original_frames, decoded_frames);
         }
     }

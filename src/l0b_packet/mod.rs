@@ -1,4 +1,4 @@
-pub mod mc00;
+pub mod mq00;
 pub mod mp00;
 pub mod mt00;
 
@@ -17,12 +17,12 @@ const MAGIC_PREAMBLE: u32 = 0xCA750200;
 
 const MAGIC_MP00: u32 = u32::from_be_bytes(*b"MP00");
 const MAGIC_MT00: u32 = u32::from_be_bytes(*b"MT00");
-const MAGIC_MC00: u32 = u32::from_be_bytes(*b"MC00");
+const MAGIC_MQ00: u32 = u32::from_be_bytes(*b"MQ00");
 
 pub enum L0bPacketType {
     Mp00(mp00::Mp00),
     Mt00(mt00::Mt00),
-    Mc00(mc00::Mc00),
+    Mq00(mq00::Mq00),
 }
 
 pub struct L0bPacket {
@@ -45,7 +45,7 @@ impl Decode for L0bPacket {
         let packet_type = match packet_type_raw {
             MAGIC_MP00 => L0bPacketType::Mp00(mp00::Mp00::decode(reader)?),
             MAGIC_MT00 => L0bPacketType::Mt00(mt00::Mt00::decode(reader)?),
-            MAGIC_MC00 => L0bPacketType::Mc00(mc00::Mc00::decode(reader)?),
+            MAGIC_MQ00 => L0bPacketType::Mq00(mq00::Mq00::decode(reader)?),
             _ => {
                 return Err(anyhow!("Packet type not found"));
             }
