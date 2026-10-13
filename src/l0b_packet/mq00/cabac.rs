@@ -44,6 +44,7 @@
 //!     }
 //! }
 //! assert_eq!(test_vec, decoded_data);
+//! 
 //! println!("Original size: {original_size}");
 //! println!("Encoded size: {encoded_size}");
 //! println!(
@@ -58,6 +59,7 @@
 use anyhow::Result;
 use bitstream_io::{BitRead, BitWrite};
 
+/// LPS ranges depending on context/encoder state
 const RANGE_TAB_LPS: [[u8; 4]; 64] = [
     [128, 176, 208, 240],
     [128, 167, 197, 227],
@@ -125,24 +127,37 @@ const RANGE_TAB_LPS: [[u8; 4]; 64] = [
     [2, 2, 2, 2],
 ];
 
+/// State transition upon encountering MPS
 const TRANS_IDX_MPS: [u8; 64] = [
     1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26,
     27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50,
     51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 62, 63,
 ];
 
+/// State transition upon encountering LPS
 const TRANS_IDX_LPS: [u8; 64] = [
     0, 0, 1, 2, 2, 4, 4, 5, 6, 7, 8, 9, 9, 11, 11, 12, 13, 13, 15, 15, 16, 16, 18, 18, 19, 19, 21,
     21, 22, 22, 23, 24, 24, 25, 26, 26, 27, 27, 28, 29, 29, 30, 30, 30, 31, 32, 32, 33, 33, 33, 34,
     34, 35, 35, 35, 36, 36, 36, 37, 37, 37, 38, 38, 63,
 ];
 
+/// Context for CABAC encoder/decoder
+///
+/// A single CABAC encoder/decoder can use multiple contexts safely during the same bitstream as
+/// long as the contexts are used in the same way during the reverse operation
 pub struct CabacContext {
-    pub p_state_idx: u8,
-    pub mps: bool,
+    p_state_idx: u8,
+    mps: bool,
+}
+
+impl Default for CabacContext {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl CabacContext {
+    /// Create a new context with default init values
     pub fn new() -> Self {
         Self {
             p_state_idx: 0,
@@ -185,7 +200,7 @@ impl<W: BitWrite> CabacEncoder<W> {
     pub fn encode_decision(&mut self, bin_val: bool, ctx: &mut CabacContext) -> Result<()> {
         let q_cod_i_range_idx = (self.cod_i_range >> 6) & 3;
         let cod_i_range_lps =
-            RANGE_TAB_LPS[ctx.p_state_idx as usize][q_cod_i_range_idx as usize] as u16;
+            u16::from(RANGE_TAB_LPS[ctx.p_state_idx as usize][q_cod_i_range_idx as usize]);
         self.cod_i_range -= cod_i_range_lps;
         if bin_val == ctx.mps {
             ctx.p_state_idx = TRANS_IDX_MPS[ctx.p_state_idx as usize];
@@ -280,14 +295,14 @@ impl<R: BitRead> CabacDecoder<R> {
         let q_cod_i_range_idx = (self.cod_i_range >> 6) & 3;
         let cod_i_range_lps = RANGE_TAB_LPS[ctx.p_state_idx as usize][q_cod_i_range_idx as usize];
         let bin_val;
-        self.cod_i_range -= cod_i_range_lps as u16;
+        self.cod_i_range -= u16::from(cod_i_range_lps);
         if self.cod_i_offset < self.cod_i_range {
             bin_val = ctx.mps;
             ctx.p_state_idx = TRANS_IDX_MPS[ctx.p_state_idx as usize];
         } else {
             bin_val = !ctx.mps;
             self.cod_i_offset -= self.cod_i_range;
-            self.cod_i_range = cod_i_range_lps as u16;
+            self.cod_i_range = u16::from(cod_i_range_lps);
             if ctx.p_state_idx == 0 {
                 ctx.mps = !ctx.mps;
             }
@@ -302,7 +317,7 @@ impl<R: BitRead> CabacDecoder<R> {
         while self.cod_i_range < 256 {
             self.cod_i_range <<= 1;
             self.cod_i_offset <<= 1;
-            self.cod_i_offset |= self.reader.read_bit()? as u16;
+            self.cod_i_offset |= u16::from(self.reader.read_bit()?);
         }
         Ok(())
     }
@@ -317,7 +332,7 @@ mod tests {
 
     proptest! {
         #[test]
-        fn test_cabac_roundtrip(data in prop::collection::vec(any::<u64>(), 1..(1000))) {
+        fn cabac_roundtrip(data in prop::collection::vec(any::<u64>(), 1..(1000))) {
             let writer = BitWriter::endian(Cursor::new(vec![]), BigEndian);
             let mut ctx = CabacContext::new();
             let mut encoder = CabacEncoder::new(writer);

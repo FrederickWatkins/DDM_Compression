@@ -1,33 +1,38 @@
-pub mod mq00;
+//! L0b format packets
 pub mod mp00;
+pub mod mq00;
 pub mod mt00;
 
-use std::io::{Read, Seek, Write};
 use anyhow::{Result, anyhow};
+use std::io::{Read, Seek, Write};
 
+/// Trait for creating structs by decoding from a byte stream
 pub trait Decode: Sized {
+    /// Attempt to create a packet from input byte stream
     fn decode<R: Read + Seek>(reader: &mut R) -> Result<Self>;
 }
 
+/// Trait for writing structs into a byte stream
 pub trait Encode {
-    fn encode<W: Write>(self, writer: &mut W) -> Result<()>;
+    /// Attempt to write packet into output byte stream
+    fn encode<W: Write>(&self, writer: &mut W) -> Result<()>;
 }
 
-const MAGIC_PREAMBLE: u32 = 0xCA750200;
+/// Magic number for all L0b packets
+const MAGIC_PREAMBLE: u32 = 0xCA75_0200;
 
 const MAGIC_MP00: u32 = u32::from_be_bytes(*b"MP00");
 const MAGIC_MT00: u32 = u32::from_be_bytes(*b"MT00");
 const MAGIC_MQ00: u32 = u32::from_be_bytes(*b"MQ00");
 
-pub enum L0bPacketType {
-    Mp00(mp00::Mp00),
-    Mt00(mt00::Mt00),
-    Mq00(mq00::Mq00),
-}
-
-pub struct L0bPacket {
-    pub packet_preamble: u32,
-    pub packet_type: L0bPacketType,
+/// Wrapper enum for all L0b packet types
+pub enum L0bPacket {
+    /// MP00 packet type; see [`mp00`]
+    MP00(mp00::MP00),
+    /// MT00 packet type; see [`mt00`]
+    MT00(mt00::MT00),
+    /// MQ00 packet type; see [`mq00`]
+    MQ00(mq00::MQ00),
 }
 
 impl Decode for L0bPacket {
@@ -42,18 +47,13 @@ impl Decode for L0bPacket {
             return Err(anyhow!("Unknown preamble"));
         }
 
-        let packet_type = match packet_type_raw {
-            MAGIC_MP00 => L0bPacketType::Mp00(mp00::Mp00::decode(reader)?),
-            MAGIC_MT00 => L0bPacketType::Mt00(mt00::Mt00::decode(reader)?),
-            MAGIC_MQ00 => L0bPacketType::Mq00(mq00::Mq00::decode(reader)?),
+        Ok(match packet_type_raw {
+            MAGIC_MP00 => L0bPacket::MP00(mp00::MP00::decode(reader)?),
+            MAGIC_MT00 => L0bPacket::MT00(mt00::MT00::decode(reader)?),
+            MAGIC_MQ00 => L0bPacket::MQ00(mq00::MQ00::decode(reader)?),
             _ => {
                 return Err(anyhow!("Packet type not found"));
             }
-        };
-
-        Ok(L0bPacket {
-            packet_preamble,
-            packet_type,
         })
     }
 }
