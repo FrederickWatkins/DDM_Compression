@@ -1,17 +1,17 @@
-use super::{Encode, Decode};
+use crate::DDMPixelData;
 
-pub struct PerFrameMetadata {
-    pub status_flag: u8,
-    pub pixel_quantisation: u8,
-    pub timestamp_seconds: u32,
-    pub timestamp_clocks: i32,
-}
+use super::{Encode, Decode};
+pub mod cabac;
 
 pub struct Mq00 {
     pub header_version: u8,
     pub channel_num: u8,
-    pub num_frames: u8,
-    pub pixel_data: Vec<u8>,
+    pub status_flag: u8,
+    pub pixel_quantisation: u8,
+    pub timestamp_seconds: u32,
+    pub timestamp_clocks: i32,
+    pub pixel_data: DDMPixelData,
+    pub crc: u32,
 }
 
 impl Encode for Mq00 {
