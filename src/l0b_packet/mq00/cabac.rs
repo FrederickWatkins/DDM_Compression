@@ -44,7 +44,7 @@
 //!     }
 //! }
 //! assert_eq!(test_vec, decoded_data);
-//! 
+//!
 //! println!("Original size: {original_size}");
 //! println!("Encoded size: {encoded_size}");
 //! println!(

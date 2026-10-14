@@ -49,14 +49,16 @@ use crate::{
 };
 
 use anyhow::{Result, anyhow};
+use std::fmt::Debug;
 use std::io::{Read, Seek, Write};
 
+/// Current only supported header version
 const HEADER_VERSION: u8 = 2;
 
 /// MP00 packet type
 ///
 /// Existing solution using pixel delta in encoding order
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct MP00 {
     channel_num: u8,
     status_flag: u8,
@@ -64,6 +66,25 @@ pub struct MP00 {
     timestamp_seconds: u32,
     timestamp_clocks: i32,
     pixel_data: DDMPixelData,
+}
+
+impl Debug for MP00 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "MP00 {{")?;
+        writeln!(f, "    channel_num: {:?},", self.channel_num)?;
+        writeln!(f, "    status_flag: {:?},", self.status_flag)?;
+        writeln!(f, "    pixel_quantisation: {:?},", self.pixel_quantisation)?;
+        writeln!(f, "    timestamp_seconds: {:?},", self.timestamp_seconds)?;
+        writeln!(f, "    timestamp_clocks: {:?},", self.timestamp_clocks)?;
+
+        writeln!(f, "    pixel_data: [")?;
+        writeln!(f, "        {:?},", self.pixel_data[0])?;
+        writeln!(f, "        {:?},", self.pixel_data[1])?;
+        writeln!(f, "        ...")?;
+        writeln!(f, "        {:?},", self.pixel_data.last().unwrap())?;
+        writeln!(f, "    ]")?;
+        write!(f, "}}")
+    }
 }
 
 impl Decode for MP00 {
@@ -217,12 +238,12 @@ fn decode_vrq<R: Read>(reader: &mut R) -> Result<(i16, usize)> {
         if bytes[1] >> 7 == 1 {
             reader.read_exact(&mut bytes[2..3])?;
             // Pass width 16 for 3-byte i16 values
-            Ok((sign_extend(&bytes, 16), 3))
+            Ok((sign_extend(&bytes[..3], 16), 3))
         } else {
-            Ok((sign_extend(&bytes, 14), 2))
+            Ok((sign_extend(&bytes[..2], 14), 2))
         }
     } else {
-        Ok((sign_extend(&bytes, 7), 1))
+        Ok((sign_extend(&bytes[..1], 7), 1))
     }
 }
 
@@ -271,7 +292,7 @@ mod tests {
     use proptest::prelude::*;
     use std::io::Cursor;
 
-    // Custom strategy to generate arbitrary valid Mp00 instances
+    // Custom strategy to generate arbitrary valid MP00 instances
     pub fn arb_mp00(
         pixel_data_strategy: impl Strategy<Value = u16> + Clone,
     ) -> impl Strategy<Value = MP00> {

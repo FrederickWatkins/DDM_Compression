@@ -4,7 +4,9 @@
 
 pub mod l0b_packet;
 
+/// Number of delay samples
 const DDM_HEIGHT: usize = 52;
+/// Number of doppler samples
 const DDM_WIDTH: usize = 20;
 
 /// Useful helper type for static sized pixel data

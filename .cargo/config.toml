@@ -1,0 +1,2 @@
+[env]
+PROPTEST_CASES = "1000"

@@ -28,11 +28,11 @@ const MAGIC_MQ00: u32 = u32::from_be_bytes(*b"MQ00");
 /// Wrapper enum for all L0b packet types
 pub enum L0bPacket {
     /// MP00 packet type; see [`mp00`]
-    MP00(mp00::MP00),
+    MP00(Box<mp00::MP00>),
     /// MT00 packet type; see [`mt00`]
-    MT00(mt00::MT00),
+    MT00(Box<mt00::MT00>),
     /// MQ00 packet type; see [`mq00`]
-    MQ00(mq00::MQ00),
+    MQ00(Box<mq00::MQ00>),
 }
 
 impl Decode for L0bPacket {
@@ -48,9 +48,9 @@ impl Decode for L0bPacket {
         }
 
         Ok(match packet_type_raw {
-            MAGIC_MP00 => L0bPacket::MP00(mp00::MP00::decode(reader)?),
-            MAGIC_MT00 => L0bPacket::MT00(mt00::MT00::decode(reader)?),
-            MAGIC_MQ00 => L0bPacket::MQ00(mq00::MQ00::decode(reader)?),
+            MAGIC_MP00 => L0bPacket::MP00(Box::new(mp00::MP00::decode(reader)?)),
+            MAGIC_MT00 => L0bPacket::MT00(Box::new(mt00::MT00::decode(reader)?)),
+            MAGIC_MQ00 => L0bPacket::MQ00(Box::new(mq00::MQ00::decode(reader)?)),
             _ => {
                 return Err(anyhow!("Packet type not found"));
             }
