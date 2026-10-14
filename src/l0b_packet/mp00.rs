@@ -81,6 +81,7 @@ impl Debug for MP00 {
         writeln!(f, "        {:?},", self.pixel_data[0])?;
         writeln!(f, "        {:?},", self.pixel_data[1])?;
         writeln!(f, "        ...")?;
+        #[allow(clippy::unwrap_used, reason = "pixel_data is a static array")]
         writeln!(f, "        {:?},", self.pixel_data.last().unwrap())?;
         writeln!(f, "    ]")?;
         write!(f, "}}")
@@ -96,7 +97,9 @@ impl Decode for MP00 {
         let channel_num = header_buf[1];
         let status_flag = header_buf[2];
         let pixel_quantisation = header_buf[3];
+        #[allow(clippy::unwrap_used, reason = "Guaranteed to be 4 long by slice")]
         let timestamp_seconds = u32::from_be_bytes(header_buf[4..8].try_into().unwrap());
+        #[allow(clippy::unwrap_used, reason = "Guaranteed to be 4 long by slice")]
         let timestamp_clocks = i32::from_be_bytes(header_buf[8..12].try_into().unwrap());
 
         if header_version != HEADER_VERSION {
@@ -110,6 +113,10 @@ impl Decode for MP00 {
 
         if !bytes_decoded.is_multiple_of(4) {
             let target_distance = 4 - (bytes_decoded % 4);
+            #[allow(
+                clippy::unwrap_used,
+                reason = "If the distance can't fit into an i64 we're buggered anyway"
+            )]
             reader.seek_relative(target_distance.try_into().unwrap())?;
         }
         let mut crc = [0u8; 4];
@@ -251,6 +258,7 @@ fn decode_vrq<R: Read>(reader: &mut R) -> Result<(i16, usize)> {
 ///
 /// Returns number of bytes written
 fn encode_vrq<W: Write>(writer: &mut W, val: i16) -> Result<usize> {
+    #![allow(clippy::unwrap_used, reason = "Guaranteed to fit by &")]
     if (-64..=63).contains(&val) {
         let b0 = u8::try_from(val.cast_unsigned() & 0x7F).unwrap();
         writer.write_all(&[b0])?;

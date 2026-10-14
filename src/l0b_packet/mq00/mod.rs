@@ -8,6 +8,7 @@ use anyhow::{Result, anyhow};
 use ndarray::{Array2, ArrayView2, Axis};
 
 pub mod cabac;
+pub mod wavelet;
 
 /// Experimental MQ00 packet type
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,9 +60,8 @@ impl MQ00 {
             ));
         }
         let shape = (pixel_data.len(), pixel_data[0].len());
-        let flat = pixel_data.as_flattened();
 
-        let pixel_data = ArrayView2::from_shape(shape, flat)?.mapv(i32::from);
+        let pixel_data = ArrayView2::from_shape(shape, pixel_data.as_flattened())?.mapv(i32::from);
         Ok(Self {
             channel_num,
             status_flag,

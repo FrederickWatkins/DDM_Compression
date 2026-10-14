@@ -1,5 +1,7 @@
 use std::{
-    fs::File, io::{BufReader, BufWriter, Cursor, Read, Seek, SeekFrom, Write}, path::Path,
+    fs::File,
+    io::{BufReader, BufWriter, Cursor, Read, Seek, SeekFrom, Write},
+    path::Path,
 };
 
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};

@@ -41,7 +41,9 @@ impl Decode for L0bPacket {
         let mut buf = [0u8; 8];
         reader.read_exact(&mut buf)?;
 
+        #[allow(clippy::unwrap_used, reason = "Guaranteed to be 4 long by slice")]
         let packet_preamble = u32::from_be_bytes(buf[0..4].try_into().unwrap());
+        #[allow(clippy::unwrap_used, reason = "Guaranteed to be 4 long by slice")]
         let packet_type_raw = u32::from_be_bytes(buf[4..8].try_into().unwrap());
 
         if packet_preamble != MAGIC_PREAMBLE {
