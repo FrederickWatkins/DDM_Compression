@@ -1,2 +1,5 @@
 [env]
 PROPTEST_CASES = "1000"
+
+[build]
+rustflags = ["-C", "target-cpu=native"]

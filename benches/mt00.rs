@@ -35,20 +35,22 @@ fn make_packets(num_packets: usize) -> Vec<mt00::MT00> {
         .collect()
 }
 
-pub fn mt00_encode(c: &mut Criterion) {
+pub fn mt00(c: &mut Criterion) {
     let packets = make_packets(NUM_PACKETS);
 
-    let mut buffer = Vec::new();
-    encode_multiple(&mut buffer, &packets);
-    let total_bytes = buffer.len();
+    // Encode once outside the timed benchmarks.
+    let mut encoded = Vec::new();
+    encode_multiple(&mut encoded, &packets);
+    let total_bytes = encoded.len();
 
-    let mut group = c.benchmark_group("mt00_encode");
+    let mut group = c.benchmark_group("mt00");
 
     group.throughput(Throughput::ElementsAndBytes {
         elements: packets.len() as u64,
         bytes: total_bytes as u64,
     });
-    group.bench_function("MT00_encode", |b| {
+
+    group.bench_function("encode", |b| {
         b.iter(|| {
             let mut writer = Vec::with_capacity(total_bytes);
             encode_multiple(&mut writer, &packets);
@@ -56,24 +58,7 @@ pub fn mt00_encode(c: &mut Criterion) {
         });
     });
 
-    group.finish();
-}
-
-pub fn mt00_decode(c: &mut Criterion) {
-    let packets = make_packets(NUM_PACKETS);
-
-    // Encode once outside the timed benchmark.
-    let mut encoded = Vec::new();
-    encode_multiple(&mut encoded, &packets);
-    let total_bytes = encoded.len();
-
-    let mut group = c.benchmark_group("mt00_decode");
-
-    group.throughput(Throughput::ElementsAndBytes {
-        elements: packets.len() as u64,
-        bytes: total_bytes as u64,
-    });
-    group.bench_function("MT00_decode", |b| {
+    group.bench_function("decode", |b| {
         b.iter(|| {
             let mut reader = Cursor::new(&encoded);
             decode_multiple(&mut reader, NUM_PACKETS)
@@ -83,5 +68,5 @@ pub fn mt00_decode(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, mt00_encode, mt00_decode);
+criterion_group!(benches, mt00);
 criterion_main!(benches);

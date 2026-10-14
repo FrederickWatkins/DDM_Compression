@@ -320,6 +320,7 @@ dependencies = [
  "proptest",
  "rand",
  "serde",
+ "tempfile",
  "tracing",
  "tracing-subscriber",
  "zstd",

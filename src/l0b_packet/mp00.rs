@@ -286,7 +286,7 @@ fn sign_extend(bytes: &[u8], width: usize) -> i16 {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::tests::arb_pixel_data;
     use proptest::prelude::*;

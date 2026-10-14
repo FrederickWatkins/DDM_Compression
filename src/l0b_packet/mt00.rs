@@ -10,7 +10,7 @@ use anyhow::Result;
 /// I have no idea what this does, something calibration related apparently
 ///
 /// All I know is that when encoded it's 64 bytes long including the preamble
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MT00 {
     buf: [u8; 56],
 }
@@ -39,5 +39,16 @@ impl MT00 {
     /// Get raw buffer from packet
     pub fn buf(&self) -> [u8; 56] {
         self.buf
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    // Custom strategy to generate arbitrary valid MP00 instances
+    pub fn arb_mt00() -> impl Strategy<Value = MT00> {
+        any::<[u8; 56]>().prop_map(|buf| MT00::new(&buf))
     }
 }
