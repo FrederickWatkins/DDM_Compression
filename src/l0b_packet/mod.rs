@@ -15,7 +15,7 @@ pub trait Decode: Sized {
 /// Trait for writing structs into a byte stream
 pub trait Encode {
     /// Attempt to write packet into output byte stream
-    fn encode<W: Write>(&self, writer: &mut W) -> Result<()>;
+    fn encode<W: Write + Seek>(&self, writer: &mut W) -> Result<()>;
 }
 
 /// Magic number for all L0b packets
@@ -41,9 +41,9 @@ impl Decode for L0bPacket {
         let mut buf = [0u8; 8];
         reader.read_exact(&mut buf)?;
 
-        #[allow(clippy::unwrap_used, reason = "Guaranteed to be 4 long by slice")]
+        #[expect(clippy::unwrap_used, reason = "Guaranteed to be 4 long by slice")]
         let packet_preamble = u32::from_be_bytes(buf[0..4].try_into().unwrap());
-        #[allow(clippy::unwrap_used, reason = "Guaranteed to be 4 long by slice")]
+        #[expect(clippy::unwrap_used, reason = "Guaranteed to be 4 long by slice")]
         let packet_type_raw = u32::from_be_bytes(buf[4..8].try_into().unwrap());
 
         if packet_preamble != MAGIC_PREAMBLE {
@@ -62,7 +62,7 @@ impl Decode for L0bPacket {
 }
 
 impl Encode for L0bPacket {
-    fn encode<W: Write>(&self, writer: &mut W) -> Result<()> {
+    fn encode<W: Write + Seek>(&self, writer: &mut W) -> Result<()> {
         let packet_type = match self {
             L0bPacket::MP00(_) => MAGIC_MP00,
             L0bPacket::MT00(_) => MAGIC_MT00,
@@ -105,10 +105,13 @@ pub(crate) mod tests {
             packets in prop::collection::vec(arb_l0b_packet(any::<u16>()), 0..20)
         ) {
             let mut encoded = vec![];
+            let mut cursor = Cursor::new(&mut encoded);
 
             for packet in &packets {
-                packet.encode(&mut encoded).unwrap();
+                packet.encode(&mut cursor).unwrap();
             }
+
+            let encoded = cursor.into_inner();
 
             let mut reader = Cursor::new(encoded);
             let mut decoded = Vec::new();

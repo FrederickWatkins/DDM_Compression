@@ -24,7 +24,7 @@ impl Decode for MT00 {
 }
 
 impl Encode for MT00 {
-    fn encode<W: Write>(&self, writer: &mut W) -> Result<()> {
+    fn encode<W: Write + Seek>(&self, writer: &mut W) -> Result<()> {
         writer.write_all(&self.buf)?;
         Ok(())
     }

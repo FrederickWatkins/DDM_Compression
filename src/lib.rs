@@ -1,10 +1,5 @@
 //! Experimental crate for DDM compression research
-#![allow(
-    dead_code,
-    unreachable_code,
-    unused_variables,
-    reason = "Developement only"
-)]
+#![allow(dead_code, unreachable_code, reason = "Developement only")]
 #![warn(missing_docs)]
 
 pub mod l0b_packet;

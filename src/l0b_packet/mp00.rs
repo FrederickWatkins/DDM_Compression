@@ -22,7 +22,8 @@
 //! let original_packet = MP00::new(2, 0, 1, 452, 4356, pixel_data);
 //! let original_size = size_of::<MP00>();
 //! let mut buffer = vec![];
-//! original_packet.encode(&mut buffer).unwrap();
+//! let mut cursor = Cursor::new(&mut buffer);
+//! original_packet.encode(&mut cursor).unwrap();
 //!
 //! let encoded_size = buffer.len();
 //!
@@ -81,7 +82,7 @@ impl Debug for MP00 {
         writeln!(f, "        {:?},", self.pixel_data[0])?;
         writeln!(f, "        {:?},", self.pixel_data[1])?;
         writeln!(f, "        ...")?;
-        #[allow(clippy::unwrap_used, reason = "pixel_data is a static array")]
+        #[expect(clippy::unwrap_used, reason = "pixel_data is a static array")]
         writeln!(f, "        {:?},", self.pixel_data.last().unwrap())?;
         writeln!(f, "    ]")?;
         write!(f, "}}")
@@ -97,14 +98,14 @@ impl Decode for MP00 {
         let channel_num = header_buf[1];
         let status_flag = header_buf[2];
         let pixel_quantisation = header_buf[3];
-        #[allow(clippy::unwrap_used, reason = "Guaranteed to be 4 long by slice")]
+        #[expect(clippy::unwrap_used, reason = "Guaranteed to be 4 long by slice")]
         let timestamp_seconds = u32::from_be_bytes(header_buf[4..8].try_into().unwrap());
-        #[allow(clippy::unwrap_used, reason = "Guaranteed to be 4 long by slice")]
+        #[expect(clippy::unwrap_used, reason = "Guaranteed to be 4 long by slice")]
         let timestamp_clocks = i32::from_be_bytes(header_buf[8..12].try_into().unwrap());
 
         if header_version != HEADER_VERSION {
             return Err(anyhow!(
-                "Illegal MP00 header version {header_version} found at byte {:x}\nOnly MP00 header version 2 is supported",
+                "Illegal MP00 header version {header_version} found at byte {:x}\nOnly MP00 header version {HEADER_VERSION} is supported",
                 reader.stream_position()?
             ));
         }
@@ -113,7 +114,7 @@ impl Decode for MP00 {
 
         if !bytes_decoded.is_multiple_of(4) {
             let target_distance = 4 - (bytes_decoded % 4);
-            #[allow(
+            #[expect(
                 clippy::unwrap_used,
                 reason = "If the distance can't fit into an i64 we're buggered anyway"
             )]
@@ -121,7 +122,7 @@ impl Decode for MP00 {
         }
         let mut crc = [0u8; 4];
         reader.read_exact(&mut crc)?;
-        let crc = u32::from_be_bytes(crc); // TODO check CRC
+        let _crc = u32::from_be_bytes(crc); // TODO check CRC
         Ok(Self {
             channel_num,
             status_flag,
@@ -134,7 +135,7 @@ impl Decode for MP00 {
 }
 
 impl Encode for MP00 {
-    fn encode<W: Write>(&self, writer: &mut W) -> Result<()> {
+    fn encode<W: Write + Seek>(&self, writer: &mut W) -> Result<()> {
         let mut header_buf = [0u8; 12];
 
         header_buf[0] = HEADER_VERSION;
@@ -338,7 +339,8 @@ pub(crate) mod tests {
         fn mp00_round_trip(original in arb_mp00(any::<u16>())) {
             // Encode the packet into an in-memory buffer
             let mut buffer = vec![];
-            original.encode(&mut buffer).unwrap();
+            let mut cursor = Cursor::new(&mut buffer);
+            original.encode(&mut cursor).unwrap();
 
             // Decode the packet back from the buffer
             let mut cursor = Cursor::new(buffer);

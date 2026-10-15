@@ -1,7 +1,7 @@
 //! Le Gall 5/3 lifting wavelet transform
 //!
 //! Based on mathematical definition in DOI: 10.1109/PACRIM.2001.953547
-use ndarray::{ArrayViewMut1, ArrayViewMutD, Axis};
+use ndarray::{ArrayViewMut, ArrayViewMut1, Axis, Dimension};
 
 /// Forward 1D DWT wavelet transform
 ///
@@ -21,7 +21,7 @@ pub fn dwt_53(array: ArrayViewMut1<i32>) {
     s0.extend(array.iter().step_by(2).copied());
 
     let s_len = s0.len();
-    #[allow(clippy::unwrap_used, reason = "We've already checked the length")]
+    #[expect(clippy::unwrap_used, reason = "We've already checked the length")]
     s0.push(*s0.last().unwrap());
 
     let (mut s, mut d) = array.split_at(Axis(0), s_len);
@@ -36,7 +36,7 @@ pub fn dwt_53(array: ArrayViewMut1<i32>) {
     }
 
     // Iterator with padding for boundary conditions
-    #[allow(clippy::unwrap_used, reason = "We've already checked the length")]
+    #[expect(clippy::unwrap_used, reason = "We've already checked the length")]
     let update_pairs = std::iter::once((*d.first().unwrap(), *d.first().unwrap()))
         .chain(d.windows(2).into_iter().map(|w| (w[0], w[1])))
         .chain(std::iter::once((*d.last().unwrap(), *d.last().unwrap())))
@@ -67,7 +67,7 @@ pub fn idwt_53(mut array: ArrayViewMut1<i32>) {
     // Allocation 1: Restored scaling coefficients with padding capacity
     let mut s_restored = Vec::with_capacity(s_len + 1);
 
-    #[allow(clippy::unwrap_used, reason = "We've already checked the length")]
+    #[expect(clippy::unwrap_used, reason = "We've already checked the length")]
     let update_pairs = std::iter::once((*d.first().unwrap(), *d.first().unwrap()))
         .chain(d.windows(2).into_iter().map(|w| (w[0], w[1])))
         .chain(std::iter::once((*d.last().unwrap(), *d.last().unwrap())))
@@ -79,7 +79,7 @@ pub fn idwt_53(mut array: ArrayViewMut1<i32>) {
             .zip(update_pairs)
             .map(|(&s_n, (d_left, d_right))| s_n - (d_left + d_right + 2).div_euclid(4)),
     );
-    #[allow(clippy::unwrap_used, reason = "We've already checked the length")]
+    #[expect(clippy::unwrap_used, reason = "We've already checked the length")]
     s_restored.push(*s_restored.last().unwrap()); // Padding for undo predict
 
     // Allocation 2: Restored detail coefficients
@@ -107,7 +107,7 @@ pub fn idwt_53(mut array: ArrayViewMut1<i32>) {
 ///
 /// The order of `axes` must be the same in `dwt_53_nd` and `idwt_53_nd` or the transformation may
 /// not be reversible
-pub fn dwt_53_nd(mut array: ArrayViewMutD<i32>, axes: &[Axis]) {
+pub fn dwt_53_nd<D: Dimension>(mut array: ArrayViewMut<i32, D>, axes: &[Axis]) {
     for &axis in axes {
         for lane in array.lanes_mut(axis) {
             dwt_53(lane);
@@ -119,7 +119,7 @@ pub fn dwt_53_nd(mut array: ArrayViewMutD<i32>, axes: &[Axis]) {
 ///
 /// The order of `axes` must be the same in `dwt_53_nd` and `idwt_53_nd` or the transformation may
 /// not be reversible
-pub fn idwt_53_nd(mut array: ArrayViewMutD<i32>, axes: &[Axis]) {
+pub fn idwt_53_nd<D: Dimension>(mut array: ArrayViewMut<i32, D>, axes: &[Axis]) {
     for &axis in axes.iter().rev() {
         for lane in array.lanes_mut(axis) {
             idwt_53(lane);

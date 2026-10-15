@@ -15,7 +15,7 @@ use rand::{RngExt, SeedableRng};
 const NUM_PACKETS: usize = 15000;
 const MT00_PROBABILITY: f64 = 0.1;
 
-fn encode_multiple<W: Write>(writer: &mut W, packets: &[L0bPacket]) {
+fn encode_multiple<W: Write + Seek>(writer: &mut W, packets: &[L0bPacket]) {
     for packet in packets {
         packet.encode(writer).unwrap();
     }
@@ -74,7 +74,8 @@ pub fn l0b(c: &mut Criterion) {
     let packets = make_packets(NUM_PACKETS);
 
     let mut encoded = Vec::new();
-    encode_multiple(&mut encoded, &packets);
+    let mut cursor = Cursor::new(&mut encoded);
+    encode_multiple(&mut cursor, &packets);
 
     let total_bytes = encoded.len();
     let mut group = c.benchmark_group("l0b");
@@ -87,7 +88,7 @@ pub fn l0b(c: &mut Criterion) {
 
     group.bench_function("encode", |b| {
         b.iter(|| {
-            let mut writer = Vec::with_capacity(total_bytes);
+            let mut writer = Cursor::new(Vec::with_capacity(total_bytes));
             encode_multiple(&mut writer, &packets);
             writer
         });

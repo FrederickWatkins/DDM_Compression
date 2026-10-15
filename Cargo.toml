@@ -3,6 +3,9 @@ name = "ddm_compression"
 version = "0.1.0"
 edition = "2024"
 
+[lints.rust]
+unused_qualifications = "warn"
+
 [lints.clippy]
 all = { level = "deny", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
@@ -19,7 +22,7 @@ allow_attributes_without_reason = "warn"
 needless_pass_by_value = "warn"
 manual_let_else = "warn"
 enum_glob_use = "warn"
-shadow_unrelated = "warn"
+allow_attributes = "warn"
 # missing_docs_in_private_items = "warn"
 
 [profile.release]
