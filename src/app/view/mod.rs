@@ -9,8 +9,11 @@ use super::{
     message::{MenuTarget, Message},
     workspace::Workspace,
 };
-use iced::widget::{Space, Stack, button, column, container, mouse_area, row, rule, text, svg};
-use iced::{Background, Border, Color, Element, Fill, Length, Theme};
+use iced::{
+    Alignment, Background, Border, Color, Element, Fill, Length, Theme, mouse,
+    widget::{Column, Space, button, column, container, mouse_area, row, rule, svg, text},
+    window,
+};
 
 /// Builds the overall window layout: custom title bar, tabs, sidebar + workspace, status bar.
 pub(super) fn app_shell<'a>(
@@ -18,7 +21,22 @@ pub(super) fn app_shell<'a>(
     workspace: &'a Workspace,
     menu_target: Option<MenuTarget>,
 ) -> Element<'a, Message> {
-    let content = column![
+    let layout = app_content(context, workspace, menu_target);
+    let frame = resize_frame(layout);
+    let menus = menu_layer(menu_target);
+
+    iced::widget::stack![frame, menus]
+        .width(Fill)
+        .height(Fill)
+        .into()
+}
+
+fn app_content<'a>(
+    context: &'a AppContext,
+    workspace: &'a Workspace,
+    menu_target: Option<MenuTarget>,
+) -> Column<'a, Message> {
+    column![
         title_bar(menu_target),
         rule::horizontal(1),
         tabs::view(workspace.tab_titles()).map(Message::Workspace),
@@ -34,22 +52,26 @@ pub(super) fn app_shell<'a>(
         status_bar::view(&context.status.message),
     ]
     .width(Fill)
-    .height(Fill);
+    .height(Fill)
+}
 
-    let base = column![
-        horizontal_resize_band(true),
+fn resize_frame(content: Column<'_, Message>) -> Column<'_, Message> {
+    column![
+        resize_band(true),
         row![
-            resize_handle(Length::Fixed(6.0), Fill, iced::window::Direction::West),
+            resize_handle(Length::Fixed(6.0), Fill, window::Direction::West),
             content,
-            resize_handle(Length::Fixed(6.0), Fill, iced::window::Direction::East),
+            resize_handle(Length::Fixed(6.0), Fill, window::Direction::East),
         ]
         .height(Fill),
-        horizontal_resize_band(false),
+        resize_band(false),
     ]
     .width(Fill)
-    .height(Fill);
+    .height(Fill)
+}
 
-    let dropdown = column![
+fn menu_layer(menu_target: Option<MenuTarget>) -> Column<'static, Message> {
+    column![
         Space::new().height(Length::Fixed(34.0)),
         row![
             Space::new().width(Length::Fixed(11.0)),
@@ -59,14 +81,7 @@ pub(super) fn app_shell<'a>(
         Space::new().height(Fill),
     ]
     .width(Fill)
-    .height(Fill);
-
-    Stack::new()
-        .push(base)
-        .push(dropdown)
-        .width(Fill)
-        .height(Fill)
-        .into()
+    .height(Fill)
 }
 
 const MINIMIZE_SVG: &[u8] = b"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'><path d='M0 4h10v2H0z' fill='#FFFFFF'/></svg>";
@@ -74,68 +89,52 @@ const MAXIMIZE_SVG: &[u8] = b"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0
 const CLOSE_SVG: &[u8] = b"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'><path d='M1.4 0L0 1.4 3.6 5 0 8.6 1.4 10 5 6.4 8.6 10 10 8.6 6.4 5 10 1.4 8.6 0 5 3.6 1.4 0z' fill='#FFFFFF'/></svg>";
 
 fn title_bar(menu_target: Option<MenuTarget>) -> Element<'static, Message> {
-    let controls = mouse_area(
-        row![
-            window_control_button(
-                svg::Handle::from_memory(MINIMIZE_SVG.to_vec()),
-                Message::WindowMinimize,
-            ),
-            window_control_button(
-                svg::Handle::from_memory(MAXIMIZE_SVG.to_vec()),
-                Message::WindowToggleMaximize,
-            ),
-            window_control_button(
-                svg::Handle::from_memory(CLOSE_SVG.to_vec()),
-                Message::WindowClose,
-            ),
-        ]
-        .spacing(2)
-        .align_y(iced::Alignment::Center),
-    )
-    .on_enter(Message::MenuHover(None));
-
-    let title_bar = Stack::new()
-        .push(
-            row![menu_bar::view(menu_target), title_drag_space(), controls]
-                .height(Fill)
-                .align_y(iced::Alignment::Center),
-        )
-        .push(
-            container(text("DDM Workbench").size(13))
-                .width(Fill)
-                .height(Fill)
-                .center_x(Fill)
-                .center_y(Fill),
-        )
+    let controls = window_controls();
+    let base = row![menu_bar::view(menu_target), title_drag_space(), controls]
+        .height(Fill)
+        .align_y(Alignment::Center);
+    let title = container(text("DDM Workbench").size(13))
         .width(Fill)
-        .height(Fill);
+        .height(Fill)
+        .center_x(Fill)
+        .center_y(Fill);
 
-    container(title_bar)
+    container(iced::widget::stack![base, title].width(Fill).height(Fill))
         .height(34)
         .width(Fill)
         .padding([2, 5])
         .into()
 }
 
-/// Helper that wraps an SVG icon in a fully centered container inside the chrome button.
-fn window_control_button(handle: svg::Handle, message: Message) -> Element<'static, Message> {
-    let icon = svg(handle)
-        .width(10)
-        .height(10);
-
-    button(
-        container(icon)
-            .width(Fill)
-            .height(Fill)
-            .center_x(Fill)
-            .center_y(Fill),
+fn window_controls() -> Element<'static, Message> {
+    mouse_area(
+        row![
+            window_control_button(MINIMIZE_SVG, Message::WindowMinimize),
+            window_control_button(MAXIMIZE_SVG, Message::WindowToggleMaximize),
+            window_control_button(CLOSE_SVG, Message::WindowClose),
+        ]
+        .spacing(2)
+        .align_y(Alignment::Center),
     )
-    .width(32)
-    .height(27)
-    .padding(0)
-    .style(chrome_button)
-    .on_press(message)
+    .on_enter(Message::MenuHover(None))
     .into()
+}
+
+fn window_control_button(svg_data: &'static [u8], message: Message) -> Element<'static, Message> {
+    let icon = svg(svg::Handle::from_memory(svg_data)).width(10).height(10);
+    let button_content = container(icon)
+        .width(Fill)
+        .height(Fill)
+        .center_x(Fill)
+        .center_y(Fill);
+
+    button(button_content)
+        .width(32)
+        .height(27)
+        .padding(0)
+        .style(chrome_button)
+        .on_press(message)
+        .into()
 }
 
 fn title_drag_space() -> Element<'static, Message> {
@@ -165,41 +164,43 @@ fn chrome_button(theme: &Theme, status: button::Status) -> button::Style {
 fn resize_handle(
     width: Length,
     height: Length,
-    direction: iced::window::Direction,
+    direction: window::Direction,
 ) -> Element<'static, Message> {
-    let interaction = match direction {
-        iced::window::Direction::North | iced::window::Direction::South => {
-            iced::mouse::Interaction::ResizingVertically
-        }
-        iced::window::Direction::East | iced::window::Direction::West => {
-            iced::mouse::Interaction::ResizingHorizontally
-        }
-        iced::window::Direction::NorthEast | iced::window::Direction::SouthWest => {
-            iced::mouse::Interaction::ResizingDiagonallyUp
-        }
-        iced::window::Direction::NorthWest | iced::window::Direction::SouthEast => {
-            iced::mouse::Interaction::ResizingDiagonallyDown
-        }
-    };
-
     mouse_area(Space::new().width(width).height(height))
-        .interaction(interaction)
+        .interaction(resize_interaction(direction))
         .on_press(Message::WindowResize(direction))
         .into()
 }
 
-fn horizontal_resize_band(top: bool) -> Element<'static, Message> {
+fn resize_interaction(direction: window::Direction) -> mouse::Interaction {
+    match direction {
+        window::Direction::North | window::Direction::South => {
+            mouse::Interaction::ResizingVertically
+        }
+        window::Direction::East | window::Direction::West => {
+            mouse::Interaction::ResizingHorizontally
+        }
+        window::Direction::NorthEast | window::Direction::SouthWest => {
+            mouse::Interaction::ResizingDiagonallyUp
+        }
+        window::Direction::NorthWest | window::Direction::SouthEast => {
+            mouse::Interaction::ResizingDiagonallyDown
+        }
+    }
+}
+
+fn resize_band(top: bool) -> Element<'static, Message> {
     let (left, middle, right) = if top {
         (
-            iced::window::Direction::NorthWest,
-            iced::window::Direction::North,
-            iced::window::Direction::NorthEast,
+            window::Direction::NorthWest,
+            window::Direction::North,
+            window::Direction::NorthEast,
         )
     } else {
         (
-            iced::window::Direction::SouthWest,
-            iced::window::Direction::South,
-            iced::window::Direction::SouthEast,
+            window::Direction::SouthWest,
+            window::Direction::South,
+            window::Direction::SouthEast,
         )
     };
 

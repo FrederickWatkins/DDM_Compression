@@ -1,4 +1,5 @@
 use crate::l0b_packet::L0bPacket;
+use iced::window::{Direction, Id};
 use std::path::PathBuf;
 
 use super::workspace;
@@ -7,12 +8,12 @@ use super::workspace;
 #[derive(Debug, Clone)]
 pub(super) enum Message {
     MenuHover(Option<MenuTarget>),
-    WindowIdResolved(Option<iced::window::Id>),
+    WindowIdResolved(Option<Id>),
     WindowDrag,
     WindowMinimize,
     WindowToggleMaximize,
     WindowClose,
-    WindowResize(iced::window::Direction),
+    WindowResize(Direction),
     OpenL0bRequested,
     OpenArchiveRequested,
     ExportL0bRequested,

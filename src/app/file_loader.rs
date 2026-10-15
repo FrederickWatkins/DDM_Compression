@@ -1,39 +1,44 @@
+use crate::{app::message::Message, l0b_packet::L0bPacket};
 use iced::Task;
 use std::{fs::File, io::BufReader, path::PathBuf};
 
-use crate::app::message::Message;
-
-pub fn pick_l0b() -> Task<Message> {
-    Task::perform(
-        async {
-            rfd::AsyncFileDialog::new()
-                .add_filter("L0B data", &["ddm"])
-                .add_filter("*", &["*"])
-                .pick_file()
-                .await
-                .map(|file| file.path().to_owned())
-        },
-        Message::L0bSelected,
-    )
+pub(super) fn pick_l0b() -> Task<Message> {
+    tracing::debug!("opening L0B file picker");
+    Task::perform(pick_l0b_path(), Message::L0bSelected)
 }
 
-pub fn load_l0b(path: PathBuf) -> Task<Message> {
-    let message_path = path.clone();
-    Task::perform(
-        async move {
-            tokio::task::spawn_blocking(move || {
-                let file = File::open(path).map_err(|e| e.to_string())?;
-                let mut reader = BufReader::new(file);
+async fn pick_l0b_path() -> Option<PathBuf> {
+    rfd::AsyncFileDialog::new()
+        .add_filter("L0B data", &["ddm"])
+        .add_filter("*", &["*"])
+        .pick_file()
+        .await
+        .map(|file| file.path().to_owned())
+}
 
-                // Collect the iterator of results into a single Result<Vec<L0bPacket>,
-                // anyhow::Error>
-                crate::l0b_packet::decode_all(&mut reader)
-                    .collect::<Result<Vec<_>, _>>()
-                    .map_err(|e| e.to_string())
-            })
-            .await
-            .map_err(|e| e.to_string())? // Handles the JoinError from spawn_blocking, then the inner Result string error
-        },
-        move |result| Message::L0bLoaded(message_path, result),
-    )
+pub(super) fn load_l0b(path: PathBuf) -> Task<Message> {
+    Task::perform(load_l0b_packets(path.clone()), move |result| {
+        Message::L0bLoaded(path, result)
+    })
+}
+
+async fn load_l0b_packets(path: PathBuf) -> Result<Vec<L0bPacket>, String> {
+    tokio::task::spawn_blocking(move || decode_l0b(path))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+fn decode_l0b(path: PathBuf) -> Result<Vec<L0bPacket>, String> {
+    tracing::debug!(path = %path.display(), "decoding L0B packets");
+    let file = File::open(path).map_err(|error| error.to_string())?;
+    let mut reader = BufReader::new(file);
+
+    let packets = crate::l0b_packet::decode_all(&mut reader)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    tracing::debug!(
+        packet_count = packets.len(),
+        "finished decoding L0B packets"
+    );
+    Ok(packets)
 }

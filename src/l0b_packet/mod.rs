@@ -6,8 +6,6 @@ pub mod mt00;
 use anyhow::{Error, Result, anyhow};
 use std::io::{self, Read, Seek, Write};
 
-use crate::l0b_packet;
-
 /// Trait for creating structs by decoding from a byte stream
 pub trait Decode: Sized {
     /// Attempt to create a packet from input byte stream

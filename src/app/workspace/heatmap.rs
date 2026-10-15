@@ -1,48 +1,59 @@
 use iced::{
     Color, Element, Length,
-    widget::{Column, Container, Row},
+    widget::{Column, Container, Row, Space, container},
 };
 use ndarray::ArrayView2;
 
-const DYNAMIC_RANGE_MAX: i32 = 5_000;
+const DYNAMIC_RANGE_MAX: u16 = 5_000;
 
-pub(crate) fn view<'a, Message: 'a>(
-    pixel_data: ArrayView2<i32>,
+pub(crate) fn view<Message: 'static>(
+    pixel_data: &ArrayView2<'_, i32>,
     pixel_width: f32,
     pixel_height: f32,
-) -> Element<'a, Message> {
+) -> Element<'static, Message> {
     let (height, width) = pixel_data.dim();
+    let rows = (0..height)
+        .map(|y| pixel_row(pixel_data, y, width, pixel_width, pixel_height).into())
+        .collect::<Vec<_>>();
 
-    let rows = (0..height).map(|y| {
-        let pixels = (0..width).map(|x| {
-            let color = heat_color(pixel_data[[y, x]]);
+    Column::with_children(rows).spacing(0).into()
+}
 
-            Container::new(
-                iced::widget::Space::new()
-                    .width(Length::Fill)
-                    .height(Length::Fill),
-            )
-            .width(pixel_width)
-            .height(pixel_height)
-            .style(move |_theme| iced::widget::container::Style {
-                background: Some(color.into()),
-                ..Default::default()
-            })
-            .into()
-        });
+fn pixel_row<Message: 'static>(
+    pixel_data: &ArrayView2<'_, i32>,
+    y: usize,
+    width: usize,
+    pixel_width: f32,
+    pixel_height: f32,
+) -> Row<'static, Message> {
+    let pixels = (0..width)
+        .map(|x| pixel_view(pixel_data[[y, x]], pixel_width, pixel_height))
+        .collect::<Vec<_>>();
 
-        Row::with_children(pixels.collect::<Vec<_>>())
-            .spacing(0)
-            .into()
-    });
+    Row::with_children(pixels).spacing(0)
+}
 
-    Column::with_children(rows.collect::<Vec<_>>())
-        .spacing(0)
+fn pixel_view<Message: 'static>(
+    value: i32,
+    pixel_width: f32,
+    pixel_height: f32,
+) -> Element<'static, Message> {
+    let color = heat_color(value);
+    Container::new(Space::new().width(Length::Fill).height(Length::Fill))
+        .width(pixel_width)
+        .height(pixel_height)
+        .style(move |_theme| container::Style {
+            background: Some(color.into()),
+            ..container::Style::default()
+        })
         .into()
 }
 
 fn heat_color(value: i32) -> Color {
-    let amount = value.abs().min(DYNAMIC_RANGE_MAX) as f32 / DYNAMIC_RANGE_MAX as f32;
+    let capped = u16::try_from(value.unsigned_abs())
+        .unwrap_or(DYNAMIC_RANGE_MAX)
+        .min(DYNAMIC_RANGE_MAX);
+    let amount = f32::from(capped) / f32::from(DYNAMIC_RANGE_MAX);
 
     // Dark blue → cyan → orange → yellow.
     let stops = [
