@@ -64,5 +64,9 @@ name = "mt00"
 harness = false
 
 [[bench]]
+name = "mq00"
+harness = false
+
+[[bench]]
 name = "l0b"
 harness = false
