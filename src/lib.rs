@@ -2,8 +2,8 @@
 #![allow(dead_code, unreachable_code, reason = "Developement only")]
 #![warn(missing_docs)]
 
-pub mod l0b_packet;
 pub mod app;
+pub mod l0b_packet;
 
 /// Number of delay samples
 const DDM_HEIGHT: usize = 52;

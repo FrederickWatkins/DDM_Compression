@@ -271,6 +271,21 @@ impl MQ00 {
         self.channel_num
     }
 
+    /// Packet status flags.
+    pub fn status_flag(&self) -> u8 {
+        self.status_flag
+    }
+
+    /// Quantisation applied to low-frequency wavelet coefficients.
+    pub fn ll_quantisation(&self) -> u8 {
+        self.ll_quantisation
+    }
+
+    /// Quantisation applied to detail wavelet coefficients.
+    pub fn detail_quantisation(&self) -> u8 {
+        self.detail_quantisation
+    }
+
     /// Time stamp of integration start: GPS seconds at last PPS as rounded integer
     pub fn timestamp_seconds(&self) -> u32 {
         self.timestamp_seconds

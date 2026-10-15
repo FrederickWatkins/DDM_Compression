@@ -184,6 +184,16 @@ impl MP00 {
         self.channel_num
     }
 
+    /// Packet status flags.
+    pub fn status_flag(&self) -> u8 {
+        self.status_flag
+    }
+
+    /// Pixel quantisation metadata from the packet header.
+    pub fn pixel_quantisation(&self) -> u8 {
+        self.pixel_quantisation
+    }
+
     /// Time stamp of integration start: GPS seconds at last PPS as rounded integer
     pub fn timestamp_seconds(&self) -> u32 {
         self.timestamp_seconds

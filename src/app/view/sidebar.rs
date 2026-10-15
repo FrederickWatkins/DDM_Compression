@@ -1,13 +1,7 @@
-use super::super::message::Message;
-use iced::widget::{Space, container};
-use iced::{Element, Fill};
+use super::super::{message::Message, workspace::Workspace};
+use iced::Element;
 
-const SIDEBAR_WIDTH: f32 = 240.0;
-
-/// Intentionally empty for now, but owns a fixed-width region on the left.
-pub(super) fn view() -> Element<'static, Message> {
-    container(Space::new().width(Fill).height(Fill))
-        .width(SIDEBAR_WIDTH)
-        .height(Fill)
-        .into()
+/// Displays metadata belonging to the currently active workspace.
+pub(super) fn view(workspace: &Workspace) -> Element<'_, Message> {
+    workspace.sidebar_view().map(Message::Workspace)
 }

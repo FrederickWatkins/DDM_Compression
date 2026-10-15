@@ -91,12 +91,10 @@ pub fn decode_all<R: Read + Seek>(reader: &mut R) -> impl Iterator<Item = Result
             None => false,
         }
     }
-    std::iter::from_fn(|| {
-        match L0bPacket::decode(reader) {
-            Ok(packet) => Some(Ok(packet)),
-            Err(err) if is_unexpected_eof(&err) => None,
-            Err(err) => Some(Err(err)),
-        }
+    std::iter::from_fn(|| match L0bPacket::decode(reader) {
+        Ok(packet) => Some(Ok(packet)),
+        Err(err) if is_unexpected_eof(&err) => None,
+        Err(err) => Some(Err(err)),
     })
 }
 

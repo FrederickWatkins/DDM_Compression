@@ -18,6 +18,7 @@ pub fn pick_l0b() -> Task<Message> {
 }
 
 pub fn load_l0b(path: PathBuf) -> Task<Message> {
+    let message_path = path.clone();
     Task::perform(
         async move {
             tokio::task::spawn_blocking(move || {
@@ -33,6 +34,6 @@ pub fn load_l0b(path: PathBuf) -> Task<Message> {
             .await
             .map_err(|e| e.to_string())? // Handles the JoinError from spawn_blocking, then the inner Result string error
         },
-        Message::L0bLoaded,
+        move |result| Message::L0bLoaded(message_path, result),
     )
 }
