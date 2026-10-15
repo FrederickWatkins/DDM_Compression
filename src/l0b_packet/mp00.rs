@@ -46,7 +46,7 @@
 
 use crate::{
     DDMPixelData,
-    l0b_packet::{Decode, Encode},
+    l0b_packet::{Decode, Encode, mq00::MQ00},
 };
 
 use anyhow::{Result, anyhow};
@@ -87,6 +87,21 @@ impl Debug for MP00 {
         writeln!(f, "    ]")?;
         write!(f, "}}")
     }
+}
+
+impl TryFrom<MQ00> for MP00 {
+    fn try_from(value: MQ00) -> Result<MP00, anyhow::Error> {
+        Ok(Self {
+            channel_num: value.channel_num(),
+            status_flag: value.status_flag(),
+            pixel_quantisation: 0,
+            timestamp_seconds: value.timestamp_seconds(),
+            timestamp_clocks: value.timestamp_clocks(),
+            pixel_data: value.pixel_data()?,
+        })
+    }
+    
+    type Error = anyhow::Error;
 }
 
 impl Decode for MP00 {

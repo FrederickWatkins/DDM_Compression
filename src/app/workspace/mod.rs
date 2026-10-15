@@ -1,10 +1,13 @@
 //! Stateful, tabbed workspaces for open data documents.
 
 pub(super) mod ddm_viewer;
+mod heatmap;
+pub(super) mod ddm_analyzer;
 
 use std::path::PathBuf;
 
 use crate::l0b_packet::L0bPacket;
+use ddm_analyzer::DdmAnalyzer;
 use ddm_viewer::DdmViewer;
 use iced::{
     Element, Task,
@@ -21,6 +24,10 @@ pub(super) enum Message {
         tab: usize,
         message: ddm_viewer::Message,
     },
+    DdmAnalyzer {
+        tab: usize,
+        message: ddm_analyzer::Message,
+    },
 }
 
 /// One independently open document and its workspace state.
@@ -35,6 +42,7 @@ struct WorkspaceTab {
 #[derive(Debug)]
 enum WorkspaceKind {
     DdmViewer(DdmViewer),
+    DdmAnalyzer(DdmAnalyzer),
 }
 
 /// Collection of open workspaces and the selected tab.
@@ -75,6 +83,23 @@ impl Workspace {
                 Task::none()
             }
             Message::DdmViewer { tab, message } => {
+                let message = match message {
+                    ddm_viewer::Message::DDMSelected { channel, seconds } => {
+                        let packet = self.tabs.get(tab).and_then(|tab| match &tab.kind {
+                            WorkspaceKind::DdmViewer(viewer) => viewer.packet(channel, seconds),
+                            WorkspaceKind::DdmAnalyzer(_) => None,
+                        });
+                        if let Some(packet) = packet {
+                            self.tabs.push(WorkspaceTab {
+                                title: format!("Channel {channel} · {seconds}s"),
+                                kind: WorkspaceKind::DdmAnalyzer(DdmAnalyzer::new(packet)),
+                            });
+                            self.active = Some(self.tabs.len() - 1);
+                        }
+                        return Task::none();
+                    }
+                    message => message,
+                };
                 let Some(WorkspaceTab {
                     kind: WorkspaceKind::DdmViewer(viewer),
                     ..
@@ -86,6 +111,17 @@ impl Workspace {
                     .update(message)
                     .map(move |message| Message::DdmViewer { tab, message })
             }
+            Message::DdmAnalyzer { tab, message } => {
+                let Some(WorkspaceTab {
+                    kind: WorkspaceKind::DdmAnalyzer(analyzer),
+                    ..
+                }) = self.tabs.get_mut(tab)
+                else {
+                    return Task::none();
+                };
+                analyzer.update(message);
+                Task::none()
+            }
         }
     }
 
@@ -93,6 +129,7 @@ impl Workspace {
     pub(super) fn is_playing(&self) -> bool {
         self.tabs.iter().any(|tab| match &tab.kind {
             WorkspaceKind::DdmViewer(viewer) => viewer.is_playing(),
+            WorkspaceKind::DdmAnalyzer(_) => false,
         })
     }
 
@@ -115,6 +152,13 @@ impl Workspace {
                 tab: self.active.unwrap_or_default(),
                 message,
             }),
+            Some(WorkspaceTab {
+                kind: WorkspaceKind::DdmAnalyzer(analyzer),
+                ..
+            }) => analyzer.sidebar().map(|message| Message::DdmAnalyzer {
+                tab: self.active.unwrap_or_default(),
+                message,
+            }),
             None => container(Space::new())
                 .width(240.0)
                 .height(iced::Fill)
@@ -132,10 +176,17 @@ impl Workspace {
                 tab: self.active.unwrap_or_default(),
                 message,
             }),
+            Some(WorkspaceTab {
+                kind: WorkspaceKind::DdmAnalyzer(analyzer),
+                ..
+            }) => analyzer.view().map(|message| Message::DdmAnalyzer {
+                tab: self.active.unwrap_or_default(),
+                message,
+            }),
             None => container(
                 column![
                     text("DDM Workbench").size(20),
-                    text("Open a file or workspace to get started.").size(14),
+                    text("Open a file to get started.").size(14),
                 ]
                 .spacing(12),
             )
@@ -166,8 +217,9 @@ impl Workspace {
 
     fn playback_tick(&mut self) {
         for tab in &mut self.tabs {
-            let WorkspaceKind::DdmViewer(viewer) = &mut tab.kind;
-            viewer.tick();
+            if let WorkspaceKind::DdmViewer(viewer) = &mut tab.kind {
+                viewer.tick();
+            }
         }
     }
 }

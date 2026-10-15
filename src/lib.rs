@@ -4,6 +4,7 @@
 
 pub mod app;
 pub mod l0b_packet;
+pub mod convert;
 
 /// Number of delay samples
 const DDM_HEIGHT: usize = 52;

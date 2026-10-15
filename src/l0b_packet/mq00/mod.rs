@@ -55,8 +55,8 @@
 use std::io::{Read, Seek, Write};
 
 use crate::{
-    l0b_packet::{Decode, Encode},
-    {DDM_HEIGHT, DDM_WIDTH, DDMPixelData},
+    DDM_HEIGHT, DDM_WIDTH, DDMPixelData,
+    l0b_packet::{Decode, Encode, mp00::MP00},
 };
 
 use cabac::{CabacContext, CabacDecoder, CabacEncoder};
@@ -101,6 +101,29 @@ pub struct MQ00 {
     timestamp_seconds: u32,
     timestamp_clocks: i32,
     pixel_data: Array2<i32>,
+}
+
+impl From<MP00> for MQ00 {
+    fn from(mp00: MP00) -> Self {
+        let pixel_data = Array2::from_shape_vec(
+            (DDM_HEIGHT, DDM_WIDTH),
+            mp00.pixel_data()
+                .iter()
+                .flat_map(|x| x.iter())
+                .map(|&x| x as i32)
+                .collect(),
+        )
+        .unwrap();
+        Self {
+            channel_num: mp00.channel_num(),
+            status_flag: mp00.status_flag(),
+            ll_quantisation: 0,
+            detail_quantisation: 0,
+            timestamp_seconds: mp00.timestamp_seconds(),
+            timestamp_clocks: mp00.timestamp_clocks(),
+            pixel_data,
+        }
+    }
 }
 
 impl Decode for MQ00 {
@@ -281,9 +304,31 @@ impl MQ00 {
         self.ll_quantisation
     }
 
+    /// Quantisation applied to low-frequency wavelet coefficients.
+    pub fn set_ll_quantisation(&mut self, value: u8) -> Result<()> {
+        if value > 0xF {
+            return Err(anyhow!(
+                "Illegal ll_quantisation {value}; low frequency quantisation must be representable in 4 bits"
+            ));
+        }
+        self.ll_quantisation = value;
+        Ok(())
+    }
+
     /// Quantisation applied to detail wavelet coefficients.
     pub fn detail_quantisation(&self) -> u8 {
         self.detail_quantisation
+    }
+
+    /// Quantisation applied to detail wavelet coefficients.
+    pub fn set_detail_quantisation(&mut self, value: u8) -> Result<()> {
+        if value > 0xF {
+            return Err(anyhow!(
+                "Illegal detail_quantisation {value}; high frequency quantisation must be representable in 4 bits"
+            ));
+        }
+        self.detail_quantisation = value;
+        Ok(())
     }
 
     /// Time stamp of integration start: GPS seconds at last PPS as rounded integer
@@ -305,6 +350,11 @@ impl MQ00 {
             }
         }
         Ok(output)
+    }
+
+    /// DDM pixel data
+    pub fn raw_pixel_data(&self) -> ArrayView2<i32> {
+        self.pixel_data.view()
     }
 
     /// Apply 2D wavelet transform

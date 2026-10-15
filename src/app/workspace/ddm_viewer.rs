@@ -1,23 +1,25 @@
 //! Time and channel based viewer for decoded L0B DDM packets.
 
-use std::{collections::HashMap, fmt, ops::RangeInclusive};
+use std::fmt;
 
-use crate::{DDMPixelData, l0b_packet::L0bPacket};
+use super::heatmap;
+use crate::{
+    convert::into_mq00_array,
+    l0b_packet::{L0bPacket, mq00::MQ00},
+};
 use iced::{
-    Alignment, Color, Element, Fill, Theme,
+    Alignment, Element, Length,
     widget::{
-        Space, button, column, container, pick_list, responsive, row, rule, scrollable, slider,
-        text,
+        Column, Container, Row, button, column, container, pick_list, responsive, rule, scrollable,
+        slider, text,
     },
 };
+use ndarray::Array2;
 
 const SIDEBAR_WIDTH: f32 = 240.0;
-const PIXEL_WIDTH: f32 = 20.0;
-const PIXEL_HEIGHT: f32 = 10.0;
 const PIXEL_GAP: f32 = 1.0;
 const NO_GAP_PIXEL_HEIGHT: f32 = 4.0;
 const CHANNEL_PANEL_GAP: f32 = 2.0;
-const DYNAMIC_RANGE_MAX: u16 = 5_000;
 
 /// Channel selection offered by the viewer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,107 +45,32 @@ pub(in crate::app) enum Message {
     SpeedChanged(f32),
     TogglePlayback,
     PlaybackTick,
+    DDMSelected { channel: u8, seconds: usize },
 }
 
 /// A decoded file indexed by channel and GPS second.
 #[derive(Debug)]
 pub(super) struct DdmViewer {
-    frames: HashMap<(u32, u8), FrameData>,
-    channels: Vec<u8>,
-    start_time: u32,
-    end_time: u32,
+    packets: Array2<Option<MQ00>>,
     current_offset: f32,
     channel: ChannelSelection,
     playback_speed: f32,
     playing: bool,
 }
 
-#[derive(Debug)]
-struct FrameData {
-    pixels: DDMPixelData,
-    metadata: FrameMetadata,
-}
-
-#[derive(Debug)]
-struct FrameMetadata {
-    packet_index: usize,
-    packet_type: &'static str,
-    status_flag: u8,
-    quantisation: String,
-    gps_seconds: u32,
-    sample_clocks: i32,
-}
-
 impl DdmViewer {
     pub(super) fn new(packets: Vec<L0bPacket>) -> Self {
-        let mut frames = HashMap::new();
-        let mut channels = Vec::new();
-        for (packet_index, packet) in packets.into_iter().enumerate() {
-            let decoded = match packet {
-                L0bPacket::MP00(packet) => Some((
-                    packet.timestamp_seconds(),
-                    packet.channel_num(),
-                    packet.pixel_data(),
-                    FrameMetadata {
-                        packet_index: packet_index + 1,
-                        packet_type: "MP00",
-                        status_flag: packet.status_flag(),
-                        quantisation: packet.pixel_quantisation().to_string(),
-                        gps_seconds: packet.timestamp_seconds(),
-                        sample_clocks: packet.timestamp_clocks(),
-                    },
-                )),
-                L0bPacket::MQ00(packet) => packet.pixel_data().ok().map(|pixels| {
-                    (
-                        packet.timestamp_seconds(),
-                        packet.channel_num(),
-                        pixels,
-                        FrameMetadata {
-                            packet_index: packet_index + 1,
-                            packet_type: "MQ00",
-                            status_flag: packet.status_flag(),
-                            quantisation: format!(
-                                "LL {}, detail {}",
-                                packet.ll_quantisation(),
-                                packet.detail_quantisation()
-                            ),
-                            gps_seconds: packet.timestamp_seconds(),
-                            sample_clocks: packet.timestamp_clocks(),
-                        },
-                    )
-                }),
-                L0bPacket::MT00(_) => None,
-            };
-
-            if let Some((gps_seconds, channel, pixels, metadata)) = decoded {
-                if channel < 16 {
-                    if !channels.contains(&channel) {
-                        channels.push(channel);
-                    }
-                    frames.insert((gps_seconds, channel), FrameData { pixels, metadata });
-                }
-            }
-        }
-        channels.sort_unstable();
-
-        let (start_time, end_time) = frames
-            .keys()
-            .map(|(gps_seconds, _)| *gps_seconds)
-            .fold(None::<(u32, u32)>, |bounds, gps_seconds| match bounds {
-                Some((start, end)) => Some((start.min(gps_seconds), end.max(gps_seconds))),
-                None => Some((gps_seconds, gps_seconds)),
-            })
-            .unwrap_or((0, 0));
-
+        let packets = into_mq00_array(packets);
+        let current_offset = 0.0;
+        let channel = ChannelSelection::All;
+        let playback_speed = 30.0;
+        let playing = true;
         Self {
-            frames,
-            channels,
-            start_time,
-            end_time,
-            current_offset: 0.0,
-            channel: ChannelSelection::All,
-            playback_speed: 1.0,
-            playing: false,
+            packets,
+            current_offset,
+            channel,
+            playback_speed,
+            playing,
         }
     }
 
@@ -155,9 +82,10 @@ impl DdmViewer {
             }
             Message::SpeedChanged(speed) => self.playback_speed = speed.clamp(1.0, 30.0),
             Message::TogglePlayback => {
-                self.playing = !self.playing && self.end_time > self.start_time;
+                self.playing = !self.playing;
             }
             Message::PlaybackTick => self.advance_playback(),
+            Message::DDMSelected { .. } => {}
         }
         iced::Task::none()
     }
@@ -176,14 +104,12 @@ impl DdmViewer {
         }
     }
 
-    fn duration_seconds(&self) -> u32 {
-        self.end_time.saturating_sub(self.start_time)
+    fn duration_seconds(&self) -> usize {
+        self.packets.dim().1
     }
 
-    fn gps_seconds(&self) -> u32 {
-        self.start_time
-            .saturating_add(self.current_offset.round() as u32)
-            .min(self.end_time)
+    fn gps_seconds(&self) -> usize {
+        self.current_offset as usize
     }
 
     /// Returns whether this viewer needs the shared playback timer.
@@ -195,249 +121,115 @@ impl DdmViewer {
         self.advance_playback();
     }
 
+    pub(super) fn packet(&self, channel: u8, seconds: usize) -> Option<MQ00> {
+        self.packets
+            .get((channel as usize, seconds))
+            .and_then(Option::as_ref)
+            .cloned()
+    }
+
     /// Packet timeline and channel controls shown in the application's sidebar.
     pub(super) fn sidebar(&self) -> Element<'_, Message> {
         let mut options: Vec<ChannelSelection> = (0..16).map(ChannelSelection::Channel).collect();
         options.push(ChannelSelection::All);
 
-        let slider_end = self.duration_seconds().max(1) as f32;
-        let mut controls = column![
-            text("Channel").size(12),
-            pick_list(options, Some(self.channel), Message::ChannelChanged),
-            rule::horizontal(1),
-            text("GPS seconds").size(12),
-            slider(
-                RangeInclusive::new(0.0, slider_end),
-                self.current_offset,
-                Message::TimeChanged,
-            )
-            .step(1.0_f32),
-            text(format!(
-                "{:.0} s  ({}–{} s)",
-                self.gps_seconds(),
-                self.start_time,
-                self.end_time
-            ))
-            .size(13),
-            rule::horizontal(1),
-            row![
-                button(text(if self.playing { "Pause" } else { "Play" }).size(13))
-                    .on_press(Message::TogglePlayback)
-                    .width(Fill)
-                    .padding([4, 8]),
-                text(format!("{:.0} s/s", self.playback_speed)).size(13),
-            ]
-            .spacing(8)
-            .align_y(Alignment::Center),
-            slider(
-                1.0_f32..=30.0_f32,
-                self.playback_speed,
-                Message::SpeedChanged
-            )
-            .step(1.0_f32),
-            text("Playback speed (GPS seconds per second)").size(11),
-            rule::horizontal(1),
-            text(format!("{} channels with DDM data", self.channels.len())).size(13),
-            text("Heatmap range: 0–5000").size(12),
+        let mut channels = vec![];
+
+        for channel in 0..16 {
+            channels.push(ChannelSelection::Channel(channel));
+        }
+        channels.push(ChannelSelection::All);
+
+        let channel_dropdown = pick_list(channels, Some(self.channel), |channel| {
+            Message::ChannelChanged(channel)
+        });
+        let button_message = match self.playing {
+            true => "Pause",
+            false => "Play",
+        };
+        let play_button = button(button_message).on_press(Message::TogglePlayback);
+        let time_slider = slider(
+            0.0..=self.duration_seconds() as f32,
+            self.current_offset,
+            |time| Message::TimeChanged(time),
+        );
+        let speed_slider = slider(0.0..=30.0, self.playback_speed, |speed| {
+            Message::SpeedChanged(speed)
+        });
+
+        let controls = column![
+            "Controls",
+            channel_dropdown,
+            time_slider,
+            speed_slider,
+            play_button
         ]
         .spacing(10);
 
-        if let ChannelSelection::Channel(channel) = self.channel {
-            controls = controls.push(rule::horizontal(1));
-            if let Some(frame) = self.frames.get(&(self.gps_seconds(), channel)) {
-                controls = controls
-                    .push(text("Packet metadata").size(16))
-                    .push(metadata_row(
-                        "Packet type",
-                        frame.metadata.packet_type.to_owned(),
-                    ))
-                    .push(metadata_row(
-                        "Packet index",
-                        frame.metadata.packet_index.to_string(),
-                    ))
-                    .push(metadata_row("Channel", channel.to_string()))
-                    .push(metadata_row(
-                        "Status flag",
-                        format!("0x{:02X}", frame.metadata.status_flag),
-                    ))
-                    .push(metadata_row(
-                        "Quantisation",
-                        frame.metadata.quantisation.clone(),
-                    ))
-                    .push(metadata_row(
-                        "GPS seconds",
-                        frame.metadata.gps_seconds.to_string(),
-                    ))
-                    .push(metadata_row(
-                        "Sample clocks",
-                        frame.metadata.sample_clocks.to_string(),
-                    ))
-                    .push(metadata_row("Pixel dimensions", "52 × 20".to_owned()));
-            } else {
-                controls = controls.push(text("Packet metadata").size(16)).push(
-                    text(format!(
-                        "No packet for channel {channel} at this GPS second."
-                    ))
-                    .size(13),
-                );
-            }
-        }
-
-        container(scrollable(controls).height(Fill))
+        container(scrollable(controls).height(Length::Fill))
             .width(SIDEBAR_WIDTH)
-            .height(Fill)
+            .height(Length::Fill)
             .padding(12)
             .into()
     }
 
     /// Displays the selected channel or a 4 × 4 channel overview.
     pub(super) fn view(&self) -> Element<'_, Message> {
-        let gps_seconds = self.gps_seconds();
         match self.channel {
-            ChannelSelection::Channel(channel) => {
-                let frame = self.frames.get(&(gps_seconds, channel));
-                container(heatmap_view(
-                    frame.map(|frame| &frame.pixels),
-                    channel,
-                    PIXEL_WIDTH,
-                    PIXEL_HEIGHT,
-                    PIXEL_GAP,
-                    None,
-                ))
-                .width(Fill)
-                .height(Fill)
-                .padding(16)
-                .center_x(Fill)
-                .center_y(Fill)
-                .into()
-            }
-            ChannelSelection::All => container(responsive(move |size| {
-                let cell_width = ((size.width - CHANNEL_PANEL_GAP * 3.0) / 4.0).max(0.0);
-                let cell_height = ((size.height - CHANNEL_PANEL_GAP * 3.0) / 4.0).max(0.0);
-                let pixel_height = ((cell_height - 24.0) / 52.0)
-                    .min(cell_width / 40.0)
-                    .floor()
-                    .max(1.0);
-                let pixel_width = pixel_height * 2.0;
-                let pixel_gap = if pixel_height < NO_GAP_PIXEL_HEIGHT {
-                    0.0
-                } else {
-                    PIXEL_GAP
-                };
-
-                let grid_rows: Vec<Element<'_, Message>> = (0..4)
-                    .map(|grid_row| {
-                        let channels: Vec<Element<'_, Message>> = (grid_row * 4..grid_row * 4 + 4)
-                            .map(|channel| {
-                                let frame = self.frames.get(&(gps_seconds, channel));
-                                let panel = heatmap_view(
-                                    frame.map(|frame| &frame.pixels),
-                                    channel,
-                                    pixel_width,
-                                    pixel_height,
-                                    pixel_gap,
-                                    Some(cell_width),
-                                );
-                                container(panel)
-                                    .width(cell_width)
-                                    .height(cell_height)
-                                    .center_x(cell_width)
-                                    .center_y(cell_height)
-                                    .into()
-                            })
-                            .collect();
-                        row(channels).spacing(CHANNEL_PANEL_GAP).into()
-                    })
-                    .collect();
-                column(grid_rows)
-                    .spacing(CHANNEL_PANEL_GAP)
-                    .width(Fill)
-                    .height(Fill)
-                    .into()
-            }))
-            .width(Fill)
-            .height(Fill)
-            .padding(12)
-            .into(),
+            ChannelSelection::Channel(channel) => Container::new(self.heatmap(channel, 1.0))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_x(Alignment::Center)
+                .align_y(Alignment::Center)
+                .into(),
+            ChannelSelection::All => self.heatmap_grid(),
         }
     }
-}
 
-fn heatmap_view<'a>(
-    pixel_data: Option<&'a DDMPixelData>,
-    channel: u8,
-    pixel_width: f32,
-    pixel_height: f32,
-    pixel_gap: f32,
-    caption_width: Option<f32>,
-) -> Element<'a, Message> {
-    let pixel_rows: Vec<Element<'a, Message>> = (0..52)
-        .map(|row_index| {
-            let cells: Vec<Element<'a, Message>> = (0..20)
-                .map(|column_index| {
-                    let color = pixel_data
-                        .map(|pixels| heat_color(pixels[row_index][column_index]))
-                        .unwrap_or_else(|| Color::from_rgb(0.32, 0.32, 0.32));
-                    container(Space::new())
-                        .width(pixel_width)
-                        .height(pixel_height)
-                        .style(move |_theme: &Theme| container::Style {
-                            background: Some(color.into()),
-                            ..container::Style::default()
-                        })
-                        .into()
+    fn heatmap(&self, channel: u8, scale: f32) -> Element<'_, Message> {
+        if let Some(ref packet) = self.packets[(channel as usize, self.gps_seconds())] {
+            let message = text!("channel {channel}\n");
+            let heatmap = heatmap::view(packet.raw_pixel_data(), 20.0 * scale, 10.0 * scale);
+            button(column![message, heatmap])
+                .on_press(Message::DDMSelected {
+                    channel,
+                    seconds: self.gps_seconds(),
                 })
-                .collect();
-            row(cells).spacing(pixel_gap).into()
-        })
-        .collect();
+                .into()
+        } else {
+            let message = text!("channel {channel}\nunavailable");
+            let heatmap = heatmap::view(
+                Array2::from_elem((52, 20), 0).view(),
+                20.0 * scale,
+                10.0 * scale,
+            );
+            column![message, heatmap].into()
+        }
+    }
 
-    let pixel_grid = column(pixel_rows).spacing(pixel_gap);
-    let title = if pixel_data.is_some() {
-        format!("Channel {channel}")
-    } else {
-        format!("Channel {channel} · unavailable")
-    };
-    let caption = container(text(title).size(if pixel_width > 10.0 { 16 } else { 11 }))
-        .width(caption_width.map_or(iced::Length::Shrink, iced::Length::Fixed))
-        .height(18.0)
-        .center_x(Fill)
-        .center_y(Fill);
-    column![caption, pixel_grid,]
-        .spacing(2.0)
+    fn heatmap_grid(&self) -> Element<'_, Message> {
+        let mut rows = vec![];
+        for row in 0..4 {
+            let mut cells = vec![];
+            for column in 0..4 {
+                let channel = row * 4 + column;
+                cells.push(self.heatmap(channel, 0.3).into());
+            }
+            rows.push(Row::with_children(cells).spacing(8).into())
+        }
+        Container::new(
+            scrollable(Column::with_children(rows))
+                .width(Length::Fill)
+                .height(Length::Fill),
+        )
         .align_x(Alignment::Center)
+        .align_y(Alignment::Center)
         .into()
+    }
 }
 
 fn metadata_row(label: &'static str, value: String) -> Element<'static, Message> {
     column![text(label).size(12), text(value).size(14)]
         .spacing(2)
         .into()
-}
-
-fn heat_color(value: u16) -> Color {
-    let amount = f32::from(value.min(DYNAMIC_RANGE_MAX)) / f32::from(DYNAMIC_RANGE_MAX);
-
-    // Dark blue → cyan → orange → yellow.
-    let stops = [
-        (0.0, Color::from_rgb(0.025, 0.035, 0.16)),
-        (0.35, Color::from_rgb(0.0, 0.48, 0.82)),
-        (0.70, Color::from_rgb(0.95, 0.23, 0.08)),
-        (1.0, Color::from_rgb(1.0, 0.92, 0.22)),
-    ];
-
-    for pair in stops.windows(2) {
-        let (start, first) = pair[0];
-        let (end, second) = pair[1];
-        if amount <= end {
-            let local = ((amount - start) / (end - start)).clamp(0.0, 1.0);
-            return Color::from_rgb(
-                first.r + (second.r - first.r) * local,
-                first.g + (second.g - first.g) * local,
-                first.b + (second.b - first.b) * local,
-            );
-        }
-    }
-
-    Color::from_rgb(1.0, 0.92, 0.22)
 }
