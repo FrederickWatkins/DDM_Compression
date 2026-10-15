@@ -3,8 +3,10 @@ pub mod mp00;
 pub mod mq00;
 pub mod mt00;
 
-use anyhow::{Result, anyhow};
-use std::io::{Read, Seek, Write};
+use anyhow::{Error, Result, anyhow};
+use std::io::{self, Read, Seek, Write};
+
+use crate::l0b_packet;
 
 /// Trait for creating structs by decoding from a byte stream
 pub trait Decode: Sized {
@@ -82,6 +84,22 @@ impl Encode for L0bPacket {
     }
 }
 
+pub fn decode_all<R: Read + Seek>(reader: &mut R) -> impl Iterator<Item = Result<L0bPacket>> {
+    fn is_unexpected_eof(err: &Error) -> bool {
+        match err.downcast_ref::<io::Error>() {
+            Some(e) => e.kind() == io::ErrorKind::UnexpectedEof,
+            None => false,
+        }
+    }
+    std::iter::from_fn(|| {
+        match L0bPacket::decode(reader) {
+            Ok(packet) => Some(Ok(packet)),
+            Err(err) if is_unexpected_eof(&err) => None,
+            Err(err) => Some(Err(err)),
+        }
+    })
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use std::io::Cursor;
@@ -94,9 +112,9 @@ pub(crate) mod tests {
         pixel_data_strategy: impl Strategy<Value = u16> + Clone,
     ) -> impl Strategy<Value = L0bPacket> {
         prop_oneof![
-            arb_mp00(pixel_data_strategy).prop_map(|p| L0bPacket::MP00(Box::new(p))),
+            arb_mp00(pixel_data_strategy.clone()).prop_map(|p| L0bPacket::MP00(Box::new(p))),
             arb_mt00().prop_map(|p| L0bPacket::MT00(Box::new(p))),
-            // arb_mq00(pixel_data_strategy).prop_map(|p| L0bPacket::MQ00(Box::new(p))),
+            arb_mq00(pixel_data_strategy.clone()).prop_map(|p| L0bPacket::MQ00(Box::new(p))),
         ]
     }
     proptest! {

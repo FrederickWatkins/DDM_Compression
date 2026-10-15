@@ -3,6 +3,7 @@
 #![warn(missing_docs)]
 
 pub mod l0b_packet;
+pub mod app;
 
 /// Number of delay samples
 const DDM_HEIGHT: usize = 52;
