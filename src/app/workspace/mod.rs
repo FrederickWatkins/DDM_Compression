@@ -8,7 +8,7 @@ use crate::l0b_packet::L0bPacket;
 use ddm_viewer::DdmViewer;
 use iced::{
     Element, Task,
-    widget::{Space, button, column, container, row, text},
+    widget::{Space, column, container, text},
 };
 
 /// Messages emitted by the currently active workspace component.
@@ -63,28 +63,15 @@ impl Workspace {
     pub(super) fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Select(index) => {
-                if index < self.tabs.len() {
-                    self.active = Some(index);
-                }
+                self.select_tab(index);
                 Task::none()
             }
             Message::Close(index) => {
-                if index < self.tabs.len() {
-                    self.tabs.remove(index);
-                    self.active = match (self.active, self.tabs.len()) {
-                        (_, 0) => None,
-                        (Some(active), _) if active > index => Some(active - 1),
-                        (Some(active), len) if active >= len => Some(len - 1),
-                        (active, _) => active,
-                    };
-                }
+                self.close_tab(index);
                 Task::none()
             }
             Message::PlaybackTick => {
-                for tab in &mut self.tabs {
-                    let WorkspaceKind::DdmViewer(viewer) = &mut tab.kind;
-                    viewer.tick();
-                }
+                self.playback_tick();
                 Task::none()
             }
             Message::DdmViewer { tab, message } => {
@@ -109,27 +96,13 @@ impl Workspace {
         })
     }
 
-    /// Builds the tab strip shown above the workspace area.
-    pub(super) fn tabs_view(&self) -> Element<'_, Message> {
-        let tabs = self.tabs.iter().enumerate().map(|(index, tab)| {
-            let title = if self.active == Some(index) {
-                format!("▣ {}", tab.title)
-            } else {
-                tab.title.clone()
-            };
-            row![
-                button(text(title))
-                    .on_press(Message::Select(index))
-                    .padding([7, 10]),
-                button("×").on_press(Message::Close(index)).padding([7, 9]),
-            ]
-            .spacing(2)
-            .into()
-        });
-        container(row(tabs).spacing(4))
-            .width(iced::Fill)
-            .padding([4, 8])
-            .into()
+    /// Returns the display data needed by the tab strip view.
+    pub(super) fn tab_titles(&self) -> Vec<(String, bool)> {
+        self.tabs
+            .iter()
+            .enumerate()
+            .map(|(index, tab)| (tab.title.clone(), self.active == Some(index)))
+            .collect()
     }
 
     /// Renders metadata belonging to the active workspace.
@@ -161,10 +134,8 @@ impl Workspace {
             }),
             None => container(
                 column![
-                    text("DDM Workbench").size(26),
-                    text(
-                        "Open an L0B data file from File → Open to inspect its packets."
-                    ),
+                    text("DDM Workbench").size(20),
+                    text("Open a file or workspace to get started.").size(14),
                 ]
                 .spacing(12),
             )
@@ -172,6 +143,31 @@ impl Workspace {
             .height(iced::Fill)
             .padding(24)
             .into(),
+        }
+    }
+
+    fn select_tab(&mut self, index: usize) {
+        if index < self.tabs.len() {
+            self.active = Some(index);
+        }
+    }
+
+    fn close_tab(&mut self, index: usize) {
+        if index < self.tabs.len() {
+            self.tabs.remove(index);
+            self.active = match (self.active, self.tabs.len()) {
+                (_, 0) => None,
+                (Some(active), _) if active > index => Some(active - 1),
+                (Some(active), len) if active >= len => Some(len - 1),
+                (active, _) => active,
+            };
+        }
+    }
+
+    fn playback_tick(&mut self) {
+        for tab in &mut self.tabs {
+            let WorkspaceKind::DdmViewer(viewer) = &mut tab.kind;
+            viewer.tick();
         }
     }
 }

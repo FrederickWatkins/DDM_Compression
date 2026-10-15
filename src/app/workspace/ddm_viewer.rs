@@ -17,7 +17,7 @@ const PIXEL_HEIGHT: f32 = 10.0;
 const PIXEL_GAP: f32 = 1.0;
 const NO_GAP_PIXEL_HEIGHT: f32 = 4.0;
 const CHANNEL_PANEL_GAP: f32 = 2.0;
-const DYNAMIC_RANGE_MAX: u16 = 3_000;
+const DYNAMIC_RANGE_MAX: u16 = 5_000;
 
 /// Channel selection offered by the viewer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -221,9 +221,10 @@ impl DdmViewer {
             .size(13),
             rule::horizontal(1),
             row![
-                button(if self.playing { "Pause" } else { "Play" })
+                button(text(if self.playing { "Pause" } else { "Play" }).size(13))
                     .on_press(Message::TogglePlayback)
-                    .width(Fill),
+                    .width(Fill)
+                    .padding([4, 8]),
                 text(format!("{:.0} s/s", self.playback_speed)).size(13),
             ]
             .spacing(8)
