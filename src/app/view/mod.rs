@@ -1,3 +1,4 @@
+pub(super) mod export_dialog;
 mod menu_bar;
 mod sidebar;
 mod status_bar;
@@ -20,15 +21,24 @@ pub(super) fn app_shell<'a>(
     context: &'a AppContext,
     workspace: &'a Workspace,
     menu_target: Option<MenuTarget>,
+    export: Option<&'a export_dialog::State>,
 ) -> Element<'a, Message> {
     let layout = app_content(context, workspace, menu_target);
     let frame = resize_frame(layout);
     let menus = menu_layer(menu_target);
 
-    iced::widget::stack![frame, menus]
+    let base_stack = iced::widget::stack![frame, menus].width(Fill).height(Fill);
+    if let Some(export) = export {
+        iced::widget::stack![
+            base_stack,
+            export_dialog::view(workspace, export).map(Message::ExportDialog)
+        ]
         .width(Fill)
         .height(Fill)
         .into()
+    } else {
+        base_stack.into()
+    }
 }
 
 fn app_content<'a>(

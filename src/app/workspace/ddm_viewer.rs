@@ -2,8 +2,8 @@
 
 use crate::{
     DDM_CHANNEL_COUNT, DDM_HEIGHT, DDM_WIDTH,
-    convert::into_mq00_array,
     l0b_packet::{L0bPacket, mq00::MQ00},
+    utils::conversion::into_mq00_array,
 };
 use anyhow::Result;
 use iced::{
@@ -134,6 +134,25 @@ impl DdmViewer {
             .get((usize::from(channel), time_index))
             .and_then(Option::as_ref)
             .cloned()
+    }
+
+    pub(super) fn export_frames(&self) -> Vec<super::ExportFrame> {
+        let mut frames = Vec::new();
+        for time_index in 0..self.packets.dim().1 {
+            for channel_index in 0..self.packets.dim().0 {
+                if let Some(packet) = self
+                    .packets
+                    .get((channel_index, time_index))
+                    .and_then(Option::as_ref)
+                {
+                    // DDM channels are fixed to 0..16 by the viewer's packet conversion.
+                    if let Ok(channel) = u8::try_from(channel_index) {
+                        frames.push((time_index, channel, packet.clone()));
+                    }
+                }
+            }
+        }
+        frames
     }
 
     /// Packet timeline and channel controls shown in the application's sidebar.

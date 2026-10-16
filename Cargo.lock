@@ -966,6 +966,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bitstream-io",
+ "ciborium",
  "clap",
  "criterion",
  "iced",

@@ -83,6 +83,10 @@ impl DdmAnalyzer {
         }
     }
 
+    pub(super) fn packet(&self) -> MQ00 {
+        self.packet.clone()
+    }
+
     pub(super) fn update(&mut self, message: Message) {
         match message {
             Message::AddConfiguration => self.add_configuration(),

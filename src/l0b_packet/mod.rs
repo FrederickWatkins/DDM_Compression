@@ -143,6 +143,18 @@ pub fn decode_all<R: Read + Seek>(reader: &mut R) -> impl Iterator<Item = Result
     })
 }
 
+/// Encode a sequence of L0B packets to a seekable output stream.
+///
+/// # Errors
+///
+/// Returns an error if writing any packet to `writer` fails.
+pub fn encode_all<W: Write + Seek>(packets: &[L0bPacket], writer: &mut W) -> Result<()> {
+    for packet in packets {
+        packet.encode(writer)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use std::io::Cursor;

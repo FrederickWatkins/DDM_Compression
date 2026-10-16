@@ -18,7 +18,10 @@ pub(super) enum Message {
     OpenArchiveRequested,
     ExportL0bRequested,
     ExportArchiveRequested,
+    ExportDialog(super::view::export_dialog::Message),
     L0bSelected(Option<PathBuf>),
+    ArchiveSelected(Option<PathBuf>),
+    ArchiveLoaded(PathBuf, Result<ciborium::Value, String>),
     L0bLoaded(PathBuf, Result<Vec<L0bPacket>, String>),
     Workspace(workspace::Message),
 }

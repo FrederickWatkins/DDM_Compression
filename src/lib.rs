@@ -2,8 +2,8 @@
 #![warn(missing_docs)]
 
 pub mod app;
-pub mod convert;
 pub mod l0b_packet;
+pub mod utils;
 
 /// Number of delay samples in a DDM.
 pub const DDM_HEIGHT: usize = 52;
