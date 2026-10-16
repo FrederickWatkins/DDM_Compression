@@ -122,7 +122,7 @@ impl App {
 
     fn open_l0b(&mut self) -> Task<Message> {
         self.menu_target = None;
-        "Open L0b file".clone_into(&mut self.context.status.message);
+        "Open L0B file".clone_into(&mut self.context.status.message);
         file_loader::pick_l0b()
     }
 
@@ -134,7 +134,6 @@ impl App {
 
         tracing::info!(path = %path.display(), "loading selected L0B file");
         self.context.status.message = format!("Opening L0b file {}", path.display());
-        self.context.document.path = Some(path.clone());
         file_loader::load_l0b(path)
     }
 
@@ -145,15 +144,25 @@ impl App {
     ) -> Task<Message> {
         match result {
             Ok(packets) => {
-                tracing::info!(path = %path.display(), packet_count = packets.len(), "L0B file loaded");
-                self.context.status.message =
-                    format!("L0b file loaded ({} packets)", packets.len());
-                self.context.document.path = Some(path.to_path_buf());
-                self.workspace.open_l0b(path, packets);
-                Task::none()
+                let packet_count = packets.len();
+                tracing::info!(path = %path.display(), packet_count, "L0B file loaded");
+                match self.workspace.open_l0b(path, packets) {
+                    Ok(()) => {
+                        self.context.status.message =
+                            format!("L0B file loaded ({packet_count} packets)");
+                        self.context.document.path = Some(path.to_path_buf());
+                        Task::none()
+                    }
+                    Err(error) => {
+                        tracing::error!(path = %path.display(), %error, "failed to build L0B viewer");
+                        self.context.status.message = format!("Failed to load L0B file: {error}");
+                        show_load_error(error.to_string())
+                    }
+                }
             }
             Err(error) => {
                 tracing::error!(path = %path.display(), %error, "failed to load L0B file");
+                self.context.status.message = format!("Failed to load L0B file: {error}");
                 show_load_error(error)
             }
         }

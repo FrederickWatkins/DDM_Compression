@@ -1,7 +1,10 @@
 use std::io::{Cursor, Read, Seek, Write};
 
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
-use ddm_compression::{DDMPixelData, l0b_packet::{Decode, Encode, mq00}};
+use ddm_compression::{
+    DDMPixelData,
+    l0b_packet::{Decode, Encode, mq00},
+};
 use rand::rngs::StdRng;
 use rand::{RngExt, SeedableRng};
 
@@ -32,7 +35,7 @@ fn make_packets(num_packets: usize) -> Vec<mq00::MQ00> {
                 }
             }
 
-            mq00::MQ00::new(1, 0, 0, 0, 6332524, 2354353, pixel_data).unwrap()
+            mq00::MQ00::new(1, 0, 0, 0, 6_332_524, 2_354_353, pixel_data).unwrap()
         })
         .collect()
 }
@@ -48,8 +51,8 @@ pub fn mq00(c: &mut Criterion) {
 
     let mut group = c.benchmark_group("mq00");
     group.throughput(Throughput::ElementsAndBytes {
-        elements: packets.len() as u64,
-        bytes: total_bytes as u64,
+        elements: u64::try_from(packets.len()).expect("packet count fits in u64"),
+        bytes: u64::try_from(total_bytes).expect("encoded size fits in u64"),
     });
 
     group.bench_function("encode", |b| {

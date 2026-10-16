@@ -1,9 +1,11 @@
 //! Time and channel based viewer for decoded L0B DDM packets.
 
 use crate::{
+    DDM_CHANNEL_COUNT, DDM_HEIGHT, DDM_WIDTH,
     convert::into_mq00_array,
     l0b_packet::{L0bPacket, mq00::MQ00},
 };
+use anyhow::Result;
 use iced::{
     Alignment, Element, Length, Task,
     widget::{
@@ -16,7 +18,6 @@ use std::fmt;
 use super::heatmap;
 
 const SIDEBAR_WIDTH: f32 = 240.0;
-const CHANNEL_COUNT: u8 = 16;
 const GRID_SIDE: u8 = 4;
 const PIXEL_WIDTH: f32 = 20.0;
 const PIXEL_HEIGHT: f32 = 10.0;
@@ -44,11 +45,10 @@ pub(in crate::app) enum Message {
     TimeChanged(f32),
     SpeedChanged(f32),
     TogglePlayback,
-    PlaybackTick,
-    DDMSelected { channel: u8, seconds: usize },
+    DDMSelected { channel: u8, time_index: usize },
 }
 
-/// A decoded file indexed by channel and GPS second.
+/// A decoded file indexed by channel and second offset from its first DDM packet.
 #[derive(Debug)]
 pub(super) struct DdmViewer {
     packets: Array2<Option<MQ00>>,
@@ -59,14 +59,14 @@ pub(super) struct DdmViewer {
 }
 
 impl DdmViewer {
-    pub(super) fn new(packets: Vec<L0bPacket>) -> Self {
-        Self {
-            packets: into_mq00_array(packets),
+    pub(super) fn new(packets: Vec<L0bPacket>) -> Result<Self> {
+        Ok(Self {
+            packets: into_mq00_array(packets)?,
             current_offset: 0.0,
             channel: ChannelSelection::All,
             playback_speed: 30.0,
             playing: true,
-        }
+        })
     }
 
     pub(super) fn update(&mut self, message: Message) -> Task<Message> {
@@ -75,16 +75,13 @@ impl DdmViewer {
             Message::TimeChanged(time) => self.set_time(time),
             Message::SpeedChanged(speed) => self.playback_speed = speed.clamp(1.0, 30.0),
             Message::TogglePlayback => self.playing = !self.playing,
-            Message::PlaybackTick => self.advance_playback(),
             Message::DDMSelected { .. } => {}
         }
         Task::none()
     }
 
     fn set_time(&mut self, time: f32) {
-        self.current_offset = time
-            .round()
-            .clamp(0.0, slider_seconds(self.duration_seconds()));
+        self.current_offset = time.round().clamp(0.0, self.last_offset());
     }
 
     fn advance_playback(&mut self) {
@@ -92,7 +89,7 @@ impl DdmViewer {
             return;
         }
 
-        let end = slider_seconds(self.duration_seconds());
+        let end = self.last_offset();
         let next_offset = self.current_offset + self.playback_speed / 10.0;
         self.current_offset = next_offset.min(end);
         self.playing = next_offset < end;
@@ -102,7 +99,11 @@ impl DdmViewer {
         self.packets.dim().1
     }
 
-    fn gps_seconds(&self) -> usize {
+    fn last_offset(&self) -> f32 {
+        slider_seconds(self.duration_seconds().saturating_sub(1))
+    }
+
+    fn time_index(&self) -> usize {
         #[expect(
             clippy::cast_possible_truncation,
             clippy::cast_sign_loss,
@@ -115,7 +116,7 @@ impl DdmViewer {
 
     fn packet_at(&self, channel: u8) -> Option<&MQ00> {
         self.packets
-            .get((usize::from(channel), self.gps_seconds()))
+            .get((usize::from(channel), self.time_index()))
             .and_then(Option::as_ref)
     }
 
@@ -128,9 +129,9 @@ impl DdmViewer {
         self.advance_playback();
     }
 
-    pub(super) fn packet(&self, channel: u8, seconds: usize) -> Option<MQ00> {
+    pub(super) fn packet(&self, channel: u8, time_index: usize) -> Option<MQ00> {
         self.packets
-            .get((usize::from(channel), seconds))
+            .get((usize::from(channel), time_index))
             .and_then(Option::as_ref)
             .cloned()
     }
@@ -154,7 +155,7 @@ impl DdmViewer {
     }
 
     fn channel_picker(&self) -> Element<'static, Message> {
-        let channels: Vec<_> = (0..CHANNEL_COUNT)
+        let channels: Vec<_> = (0..DDM_CHANNEL_COUNT)
             .map(ChannelSelection::Channel)
             .chain(std::iter::once(ChannelSelection::All))
             .collect();
@@ -164,7 +165,7 @@ impl DdmViewer {
 
     fn time_control(&self) -> Element<'static, Message> {
         slider(
-            0.0..=slider_seconds(self.duration_seconds()),
+            0.0..=self.last_offset(),
             self.current_offset,
             Message::TimeChanged,
         )
@@ -214,7 +215,7 @@ impl DdmViewer {
         ])
         .on_press(Message::DDMSelected {
             channel,
-            seconds: self.gps_seconds(),
+            time_index: self.time_index(),
         })
         .into()
     }
@@ -255,7 +256,7 @@ fn slider_seconds(seconds: usize) -> f32 {
 }
 
 fn unavailable_heatmap(channel: u8, scale: f32) -> Element<'static, Message> {
-    let empty_pixels = Array2::from_elem((52, 20), 0);
+    let empty_pixels = Array2::from_elem((DDM_HEIGHT, DDM_WIDTH), 0);
     column![
         text!("channel {channel}\nunavailable"),
         heatmap::view(

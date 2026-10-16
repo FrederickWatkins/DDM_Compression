@@ -332,7 +332,7 @@ mod tests {
 
     proptest! {
         #[test]
-        fn cabac_roundtrip(data in prop::collection::vec(any::<u64>(), 1..(1000))) {
+        fn cabac_roundtrip(data in prop::collection::vec(any::<u64>(), 1..1000)) {
             let writer = BitWriter::endian(Cursor::new(vec![]), BigEndian);
             let mut ctx = CabacContext::new();
             let mut encoder = CabacEncoder::new(writer);
@@ -357,7 +357,7 @@ mod tests {
             let mut decoder = CabacDecoder::new(reader).unwrap();
 
             let mut decoded_data = vec![0u64; data.len()];
-            for x in decoded_data.iter_mut() {
+            for x in &mut decoded_data {
                 for bit_idx in 0..64 {
                     let bit = decoder.decode_decision(&mut ctx).unwrap();
                     if bit {

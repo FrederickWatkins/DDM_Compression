@@ -5,6 +5,7 @@ pub(super) mod ddm_viewer;
 mod heatmap;
 
 use crate::l0b_packet::{L0bPacket, mq00::MQ00};
+use anyhow::Result;
 use ddm_analyzer::DdmAnalyzer;
 use ddm_viewer::DdmViewer;
 use iced::{
@@ -53,18 +54,20 @@ pub(super) struct Workspace {
 
 impl Workspace {
     /// Opens a decoded L0B file in a new DDM viewer tab.
-    pub(super) fn open_l0b(&mut self, path: &Path, packets: Vec<L0bPacket>) {
+    pub(super) fn open_l0b(&mut self, path: &Path, packets: Vec<L0bPacket>) -> Result<()> {
         let title = path
             .file_name()
             .and_then(|name| name.to_str())
             .unwrap_or("L0B data")
             .to_owned();
         tracing::debug!(tab = %title, packet_count = packets.len(), "opening L0B viewer tab");
+        let viewer = DdmViewer::new(packets)?;
         self.tabs.push(WorkspaceTab {
             title,
-            kind: WorkspaceKind::DdmViewer(DdmViewer::new(packets)),
+            kind: WorkspaceKind::DdmViewer(viewer),
         });
         self.active = Some(self.tabs.len() - 1);
+        Ok(())
     }
 
     /// Updates active-tab selection, closes a tab, or delegates to a workspace.
@@ -88,8 +91,12 @@ impl Workspace {
     }
 
     fn update_viewer(&mut self, index: usize, message: ddm_viewer::Message) -> Task<Message> {
-        if let ddm_viewer::Message::DDMSelected { channel, seconds } = message {
-            self.open_analyzer(index, channel, seconds);
+        if let ddm_viewer::Message::DDMSelected {
+            channel,
+            time_index,
+        } = message
+        {
+            self.open_analyzer(index, channel, time_index);
             return Task::none();
         }
 
@@ -109,28 +116,29 @@ impl Workspace {
             })
     }
 
-    fn open_analyzer(&mut self, index: usize, channel: u8, seconds: usize) {
-        let Some(packet) = self.viewer_packet(index, channel, seconds) else {
+    fn open_analyzer(&mut self, index: usize, channel: u8, time_index: usize) {
+        let Some(packet) = self.viewer_packet(index, channel, time_index) else {
             tracing::warn!(
                 tab = index,
                 channel,
-                seconds,
+                time_index,
                 "could not open analyzer for selected DDM"
             );
             return;
         };
 
-        tracing::debug!(tab = index, channel, seconds, "opening DDM analyzer tab");
+        let timestamp = packet.timestamp_seconds();
+        tracing::debug!(tab = index, channel, timestamp, "opening DDM analyzer tab");
         self.tabs.push(WorkspaceTab {
-            title: format!("Channel {channel} · {seconds}s"),
+            title: format!("Channel {channel} · {timestamp}s"),
             kind: WorkspaceKind::DdmAnalyzer(DdmAnalyzer::new(packet)),
         });
         self.active = Some(self.tabs.len() - 1);
     }
 
-    fn viewer_packet(&self, index: usize, channel: u8, seconds: usize) -> Option<MQ00> {
+    fn viewer_packet(&self, index: usize, channel: u8, time_index: usize) -> Option<MQ00> {
         match &self.tabs.get(index)?.kind {
-            WorkspaceKind::DdmViewer(viewer) => viewer.packet(channel, seconds),
+            WorkspaceKind::DdmViewer(viewer) => viewer.packet(channel, time_index),
             WorkspaceKind::DdmAnalyzer(_) => None,
         }
     }

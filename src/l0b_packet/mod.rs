@@ -41,13 +41,13 @@ impl Decode for L0bPacket {
         let mut buf = [0u8; 8];
         reader.read_exact(&mut buf)?;
 
-        #[expect(clippy::unwrap_used, reason = "Guaranteed to be 4 long by slice")]
-        let packet_preamble = u32::from_be_bytes(buf[0..4].try_into().unwrap());
-        #[expect(clippy::unwrap_used, reason = "Guaranteed to be 4 long by slice")]
-        let packet_type_raw = u32::from_be_bytes(buf[4..8].try_into().unwrap());
+        let packet_preamble = u32::from_be_bytes(buf[0..4].try_into()?);
+        let packet_type_raw = u32::from_be_bytes(buf[4..8].try_into()?);
 
         if packet_preamble != MAGIC_PREAMBLE {
-            return Err(anyhow!("Unknown preamble"));
+            return Err(anyhow!(
+                "Unknown L0B packet preamble {packet_preamble:#010x}"
+            ));
         }
 
         Ok(match packet_type_raw {
@@ -55,7 +55,7 @@ impl Decode for L0bPacket {
             MAGIC_MT00 => L0bPacket::MT00(Box::new(mt00::MT00::decode(reader)?)),
             MAGIC_MQ00 => L0bPacket::MQ00(Box::new(mq00::MQ00::decode(reader)?)),
             _ => {
-                return Err(anyhow!("Packet type not found"));
+                return Err(anyhow!("Unknown L0B packet type {packet_type_raw:#010x}"));
             }
         })
     }
@@ -82,7 +82,22 @@ impl Encode for L0bPacket {
     }
 }
 
-/// Decode all L0b packets from an input stream
+/// Decode packets from a stream until clean end-of-file or the first malformed packet.
+///
+/// An incomplete packet is returned as an error. Only end-of-file before any bytes of the next
+/// packet is treated as normal completion.
+///
+/// # Examples
+///
+/// ```
+/// use ddm_compression::l0b_packet::decode_all;
+/// use std::io::Cursor;
+///
+/// let mut reader = Cursor::new(Vec::<u8>::new());
+/// let packets = decode_all(&mut reader).collect::<Result<Vec<_>, _>>()?;
+/// assert!(packets.is_empty());
+/// # Ok::<(), anyhow::Error>(())
+/// ```
 pub fn decode_all<R: Read + Seek>(reader: &mut R) -> impl Iterator<Item = Result<L0bPacket>> {
     fn is_unexpected_eof(err: &Error) -> bool {
         match err.downcast_ref::<io::Error>() {
@@ -90,10 +105,41 @@ pub fn decode_all<R: Read + Seek>(reader: &mut R) -> impl Iterator<Item = Result
             None => false,
         }
     }
-    std::iter::from_fn(|| match L0bPacket::decode(reader) {
-        Ok(packet) => Some(Ok(packet)),
-        Err(err) if is_unexpected_eof(&err) => None,
-        Err(err) => Some(Err(err)),
+    let mut done = false;
+    std::iter::from_fn(move || {
+        if done {
+            return None;
+        }
+
+        let start = match reader.stream_position() {
+            Ok(position) => position,
+            Err(error) => {
+                done = true;
+                return Some(Err(error.into()));
+            }
+        };
+
+        match L0bPacket::decode(reader) {
+            Ok(packet) => Some(Ok(packet)),
+            Err(error) if is_unexpected_eof(&error) => match reader.stream_position() {
+                Ok(position) if position == start => {
+                    done = true;
+                    None
+                }
+                Ok(_) => {
+                    done = true;
+                    Some(Err(error))
+                }
+                Err(position_error) => {
+                    done = true;
+                    Some(Err(position_error.into()))
+                }
+            },
+            Err(error) => {
+                done = true;
+                Some(Err(error))
+            }
+        }
     })
 }
 
@@ -119,8 +165,7 @@ pub(crate) mod tests {
         fn l0b_roundtrip(
             packets in prop::collection::vec(arb_l0b_packet(any::<u16>()), 0..20)
         ) {
-            let mut encoded = vec![];
-            let mut cursor = Cursor::new(&mut encoded);
+            let mut cursor = Cursor::new(Vec::new());
 
             for packet in &packets {
                 packet.encode(&mut cursor).unwrap();
@@ -129,13 +174,11 @@ pub(crate) mod tests {
             let encoded = cursor.into_inner();
 
             let mut reader = Cursor::new(encoded);
-            let mut decoded = Vec::new();
-
-            while (reader.position() as usize) < reader.get_ref().len() {
-                decoded.push(L0bPacket::decode(&mut reader).unwrap());
+            let decoded = decode_all(&mut reader).collect::<Result<Vec<_>>>();
+            match decoded {
+                Ok(decoded) => prop_assert_eq!(decoded, packets),
+                Err(error) => prop_assert!(false, "packet stream failed to decode: {error}"),
             }
-
-            prop_assert_eq!(decoded, packets);
         }
     }
 }

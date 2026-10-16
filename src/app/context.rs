@@ -13,16 +13,6 @@ pub(super) struct DocumentContext {
     pub path: Option<PathBuf>,
 }
 
-impl DocumentContext {
-    pub fn display_name(&self) -> &str {
-        self.path
-            .as_deref()
-            .and_then(|path| path.file_name())
-            .and_then(|name| name.to_str())
-            .unwrap_or("No file open")
-    }
-}
-
 /// Text shown in the status bar at the bottom of the window.
 #[derive(Debug)]
 pub(super) struct StatusContext {

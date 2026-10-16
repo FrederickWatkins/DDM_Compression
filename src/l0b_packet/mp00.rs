@@ -82,15 +82,16 @@ impl Debug for MP00 {
         writeln!(f, "        {:?},", self.pixel_data[0])?;
         writeln!(f, "        {:?},", self.pixel_data[1])?;
         writeln!(f, "        ...")?;
-        #[expect(clippy::unwrap_used, reason = "pixel_data is a static array")]
-        writeln!(f, "        {:?},", self.pixel_data.last().unwrap())?;
+        writeln!(f, "        {:?},", self.pixel_data[crate::DDM_HEIGHT - 1])?;
         writeln!(f, "    ]")?;
         write!(f, "}}")
     }
 }
 
-impl TryFrom<MQ00> for MP00 {
-    fn try_from(value: MQ00) -> Result<MP00, anyhow::Error> {
+impl TryFrom<&MQ00> for MP00 {
+    type Error = anyhow::Error;
+
+    fn try_from(value: &MQ00) -> Result<Self> {
         Ok(Self {
             channel_num: value.channel_num(),
             status_flag: value.status_flag(),
@@ -100,12 +101,19 @@ impl TryFrom<MQ00> for MP00 {
             pixel_data: value.pixel_data()?,
         })
     }
-    
+}
+
+impl TryFrom<MQ00> for MP00 {
     type Error = anyhow::Error;
+
+    fn try_from(value: MQ00) -> Result<Self> {
+        Self::try_from(&value)
+    }
 }
 
 impl Decode for MP00 {
     fn decode<R: Read + Seek>(reader: &mut R) -> Result<Self> {
+        let start_pos = reader.stream_position()?;
         let mut header_buf = [0u8; 12];
 
         reader.read_exact(&mut header_buf)?;
@@ -113,15 +121,12 @@ impl Decode for MP00 {
         let channel_num = header_buf[1];
         let status_flag = header_buf[2];
         let pixel_quantisation = header_buf[3];
-        #[expect(clippy::unwrap_used, reason = "Guaranteed to be 4 long by slice")]
-        let timestamp_seconds = u32::from_be_bytes(header_buf[4..8].try_into().unwrap());
-        #[expect(clippy::unwrap_used, reason = "Guaranteed to be 4 long by slice")]
-        let timestamp_clocks = i32::from_be_bytes(header_buf[8..12].try_into().unwrap());
+        let timestamp_seconds = u32::from_be_bytes(header_buf[4..8].try_into()?);
+        let timestamp_clocks = i32::from_be_bytes(header_buf[8..12].try_into()?);
 
         if header_version != HEADER_VERSION {
             return Err(anyhow!(
-                "Illegal MP00 header version {header_version} found at byte {:x}\nOnly MP00 header version {HEADER_VERSION} is supported",
-                reader.stream_position()?
+                "Illegal MP00 header version {header_version} found at byte {start_pos:x}\nOnly MP00 header version {HEADER_VERSION} is supported"
             ));
         }
 
@@ -129,11 +134,7 @@ impl Decode for MP00 {
 
         if !bytes_decoded.is_multiple_of(4) {
             let target_distance = 4 - (bytes_decoded % 4);
-            #[expect(
-                clippy::unwrap_used,
-                reason = "If the distance can't fit into an i64 we're buggered anyway"
-            )]
-            reader.seek_relative(target_distance.try_into().unwrap())?;
+            reader.seek_relative(i64::try_from(target_distance)?)?;
         }
         let mut crc = [0u8; 4];
         reader.read_exact(&mut crc)?;
@@ -166,7 +167,7 @@ impl Encode for MP00 {
 
         if !bytes_encoded.is_multiple_of(4) {
             let target_distance = 4 - (bytes_encoded % 4);
-            writer.write_all(&vec![0u8; target_distance])?;
+            writer.write_all(&[0u8; 3][..target_distance])?;
         }
         let crc = 0u32; // TODO write actual CRC code
         writer.write_all(&crc.to_be_bytes())?;
@@ -219,9 +220,9 @@ impl MP00 {
         self.timestamp_clocks
     }
 
-    /// DDM pixel data
-    pub fn pixel_data(&self) -> DDMPixelData {
-        self.pixel_data
+    /// Borrow the DDM pixel data.
+    pub fn pixel_data(&self) -> &DDMPixelData {
+        &self.pixel_data
     }
 }
 

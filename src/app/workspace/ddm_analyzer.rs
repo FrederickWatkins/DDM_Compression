@@ -66,7 +66,7 @@ pub(super) struct DdmAnalyzer {
 impl DdmAnalyzer {
     pub(super) fn new(packet: MQ00) -> Self {
         let wavelet_coded_packet = wavelet_coded(&packet);
-        let mp00_encoded_size = MP00::try_from(packet.clone())
+        let mp00_encoded_size = MP00::try_from(&packet)
             .ok()
             .and_then(|mp00| encode_size(&mp00));
         let configurations = [

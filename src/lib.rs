@@ -1,15 +1,16 @@
 //! Experimental crate for DDM compression research
-#![allow(dead_code, unreachable_code, reason = "Developement only")]
 #![warn(missing_docs)]
 
 pub mod app;
-pub mod l0b_packet;
 pub mod convert;
+pub mod l0b_packet;
 
-/// Number of delay samples
-const DDM_HEIGHT: usize = 52;
-/// Number of doppler samples
-const DDM_WIDTH: usize = 20;
+/// Number of delay samples in a DDM.
+pub const DDM_HEIGHT: usize = 52;
+/// Number of doppler samples in a DDM.
+pub const DDM_WIDTH: usize = 20;
+/// Number of hardware channels in a DDM.
+pub const DDM_CHANNEL_COUNT: u8 = 16;
 
 /// Useful helper type for static sized pixel data
 pub type DDMPixelData = [[u16; DDM_WIDTH]; DDM_HEIGHT];

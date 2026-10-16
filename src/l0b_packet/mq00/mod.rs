@@ -105,16 +105,9 @@ pub struct MQ00 {
 
 impl From<MP00> for MQ00 {
     fn from(mp00: MP00) -> Self {
-        #[expect(clippy::unwrap_used, reason = "Size guaranteed to match by type")]
-        let pixel_data = Array2::from_shape_vec(
-            (DDM_HEIGHT, DDM_WIDTH),
-            mp00.pixel_data()
-                .iter()
-                .flat_map(|x| x.iter())
-                .map(|&x| i32::from(x))
-                .collect(),
-        )
-        .unwrap();
+        let pixel_data = Array2::from_shape_fn((DDM_HEIGHT, DDM_WIDTH), |(row, column)| {
+            i32::from(mp00.pixel_data()[row][column])
+        });
         Self {
             channel_num: mp00.channel_num(),
             status_flag: mp00.status_flag(),
@@ -137,15 +130,12 @@ impl Decode for MQ00 {
         let channel_num = header_buf[1];
         let status_flag = header_buf[2];
         let pixel_quantisation = header_buf[3];
-        #[expect(clippy::unwrap_used, reason = "Guaranteed to be 4 long by slice")]
-        let timestamp_seconds = u32::from_be_bytes(header_buf[4..8].try_into().unwrap());
-        #[expect(clippy::unwrap_used, reason = "Guaranteed to be 4 long by slice")]
-        let timestamp_clocks = i32::from_be_bytes(header_buf[8..12].try_into().unwrap());
+        let timestamp_seconds = u32::from_be_bytes(header_buf[4..8].try_into()?);
+        let timestamp_clocks = i32::from_be_bytes(header_buf[8..12].try_into()?);
 
         if header_version != HEADER_VERSION {
             return Err(anyhow!(
-                "Illegal MQ00 header version {header_version} found at byte {:x}\nOnly MQ00 header version {HEADER_VERSION} is supported",
-                reader.stream_position()?
+                "Illegal MQ00 header version {header_version} found at byte {start_pos:x}\nOnly MQ00 header version {HEADER_VERSION} is supported"
             ));
         }
 
@@ -185,11 +175,7 @@ impl Decode for MQ00 {
         let bytes_decoded = reader.stream_position()? - start_pos;
         if !bytes_decoded.is_multiple_of(4) {
             let target_distance = 4 - (bytes_decoded % 4);
-            #[expect(
-                clippy::unwrap_used,
-                reason = "If the distance can't fit into an i64 we're buggered anyway"
-            )]
-            reader.seek_relative(target_distance.try_into().unwrap())?;
+            reader.seek_relative(i64::try_from(target_distance)?)?;
         }
         let mut crc = [0u8; 4];
         reader.read_exact(&mut crc)?;
@@ -241,11 +227,7 @@ impl Encode for MQ00 {
 
         if !bytes_encoded.is_multiple_of(4) {
             let target_distance = 4 - (bytes_encoded % 4);
-            #[expect(
-                clippy::cast_possible_truncation,
-                reason = "Only possible if packet is longer than address space"
-            )]
-            writer.write_all(&vec![0u8; target_distance as usize])?;
+            writer.write_all(&[0u8; 3][..usize::try_from(target_distance)?])?;
         }
         let crc = 0u32; // TODO write actual CRC code
         writer.write_all(&crc.to_be_bytes())?;
@@ -276,9 +258,9 @@ impl MQ00 {
                 "Illegal detail_quantisation {detail_quantisation}; high frequency quantisation must be representable in 4 bits"
             ));
         }
-        let shape = (pixel_data.len(), pixel_data[0].len());
-
-        let pixel_data = ArrayView2::from_shape(shape, pixel_data.as_flattened())?.mapv(i32::from);
+        let pixel_data = Array2::from_shape_fn((DDM_HEIGHT, DDM_WIDTH), |(row, column)| {
+            i32::from(pixel_data[row][column])
+        });
         Ok(Self {
             channel_num,
             status_flag,

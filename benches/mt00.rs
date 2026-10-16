@@ -7,7 +7,7 @@ use rand::{RngExt, SeedableRng};
 
 const NUM_PACKETS: usize = 100;
 
-fn encode_multiple<W: Write + Seek>(writer: &mut W, packets: &Vec<mt00::MT00>) {
+fn encode_multiple<W: Write + Seek>(writer: &mut W, packets: &[mt00::MT00]) {
     for packet in packets {
         packet.encode(writer).unwrap();
     }
@@ -47,8 +47,8 @@ pub fn mt00(c: &mut Criterion) {
     let mut group = c.benchmark_group("mt00");
 
     group.throughput(Throughput::ElementsAndBytes {
-        elements: packets.len() as u64,
-        bytes: total_bytes as u64,
+        elements: u64::try_from(packets.len()).expect("packet count fits in u64"),
+        bytes: u64::try_from(total_bytes).expect("encoded size fits in u64"),
     });
 
     group.bench_function("encode", |b| {

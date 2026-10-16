@@ -27,7 +27,7 @@ fn decode_multiple<R: Read + Seek>(reader: &mut R, count: usize) -> Vec<L0bPacke
         .collect()
 }
 
-fn decode_all<R: Read + Seek>(reader: &mut R, limit: usize) -> (Vec<L0bPacket>, usize) {
+fn decode_all<R: Read + Seek>(reader: &mut R, limit: usize) -> (Vec<L0bPacket>, u64) {
     let end = reader.seek(SeekFrom::End(0)).unwrap();
     reader.seek(SeekFrom::Start(0)).unwrap();
 
@@ -37,7 +37,7 @@ fn decode_all<R: Read + Seek>(reader: &mut R, limit: usize) -> (Vec<L0bPacket>, 
         packets.push(L0bPacket::decode(reader).unwrap());
     }
 
-    (packets, reader.stream_position().unwrap() as usize)
+    (packets, reader.stream_position().unwrap())
 }
 
 fn make_packets(num_packets: usize) -> Vec<L0bPacket> {
@@ -63,7 +63,7 @@ fn make_packets(num_packets: usize) -> Vec<L0bPacket> {
                 }
 
                 L0bPacket::MP00(Box::new(mp00::MP00::new(
-                    1, 0, 0, 6332524, 2354353, pixel_data,
+                    1, 0, 0, 6_332_524, 2_354_353, pixel_data,
                 )))
             }
         })
@@ -81,8 +81,8 @@ pub fn l0b(c: &mut Criterion) {
     let mut group = c.benchmark_group("l0b");
 
     group.throughput(Throughput::ElementsAndBytes {
-        elements: packets.len() as u64,
-        bytes: total_bytes as u64,
+        elements: u64::try_from(packets.len()).expect("packet count fits in u64"),
+        bytes: u64::try_from(total_bytes).expect("encoded size fits in u64"),
     });
     group.sample_size(50);
 
@@ -104,21 +104,31 @@ pub fn l0b(c: &mut Criterion) {
     group.finish();
 
     let data_path = Path::new("data/HG1_003014_20260829_102905.l0b.ddm");
-
-    // Prepare the packets once, outside the timed encoding benchmark.
+    // Use the representative local sample when available, with a generated fixture as fallback.
+    let mut source_file = if data_path.is_file() {
+        None
+    } else {
+        Some(tempfile::NamedTempFile::new().unwrap())
+    };
+    if let Some(source_file) = source_file.as_mut() {
+        let mut writer = BufWriter::new(source_file.as_file_mut());
+        encode_multiple(&mut writer, &packets);
+        writer.flush().unwrap();
+    }
+    let source_path = source_file.as_ref().map_or(data_path, |file| file.path());
     let (packets, file_size) = {
-        let file = File::open(data_path).unwrap();
+        let file = File::open(source_path).unwrap();
         decode_all(&mut BufReader::new(file), NUM_PACKETS)
     };
 
-    // Benchmark encoding those packets to a temporary file.
+    // Benchmark encoding to a separate temporary file.
     let mut temp_file = tempfile::NamedTempFile::new().unwrap();
 
     let mut group = c.benchmark_group("l0b_disk");
 
     group.throughput(Throughput::ElementsAndBytes {
-        elements: packets.len() as u64,
-        bytes: file_size as u64,
+        elements: u64::try_from(packets.len()).expect("packet count fits in u64"),
+        bytes: file_size,
     });
     group.sample_size(10);
     group.measurement_time(std::time::Duration::from_secs(10));
@@ -140,13 +150,13 @@ pub fn l0b(c: &mut Criterion) {
 
     group.bench_function("decode", |b| {
         b.iter(|| {
-            let file = File::open(data_path).unwrap();
+            let file = File::open(source_path).unwrap();
             let mut reader = BufReader::new(file);
             decode_all(&mut reader, NUM_PACKETS)
         });
     });
 
-    group.finish()
+    group.finish();
 }
 
 criterion_group!(benches, l0b);

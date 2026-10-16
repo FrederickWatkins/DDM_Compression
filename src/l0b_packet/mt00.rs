@@ -37,8 +37,8 @@ impl MT00 {
     }
 
     /// Get raw buffer from packet
-    pub fn buf(&self) -> [u8; 56] {
-        self.buf
+    pub fn buf(&self) -> &[u8; 56] {
+        &self.buf
     }
 }
 
