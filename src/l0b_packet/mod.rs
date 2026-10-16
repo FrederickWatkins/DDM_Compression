@@ -82,6 +82,7 @@ impl Encode for L0bPacket {
     }
 }
 
+/// Decode all L0b packets from an input stream
 pub fn decode_all<R: Read + Seek>(reader: &mut R) -> impl Iterator<Item = Result<L0bPacket>> {
     fn is_unexpected_eof(err: &Error) -> bool {
         match err.downcast_ref::<io::Error>() {

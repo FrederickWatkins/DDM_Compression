@@ -105,12 +105,13 @@ pub struct MQ00 {
 
 impl From<MP00> for MQ00 {
     fn from(mp00: MP00) -> Self {
+        #[expect(clippy::unwrap_used, reason = "Size guaranteed to match by type")]
         let pixel_data = Array2::from_shape_vec(
             (DDM_HEIGHT, DDM_WIDTH),
             mp00.pixel_data()
                 .iter()
                 .flat_map(|x| x.iter())
-                .map(|&x| x as i32)
+                .map(|&x| i32::from(x))
                 .collect(),
         )
         .unwrap();
@@ -353,7 +354,7 @@ impl MQ00 {
     }
 
     /// DDM pixel data
-    pub fn raw_pixel_data(&self) -> ArrayView2<i32> {
+    pub fn raw_pixel_data(&self) -> ArrayView2<'_, i32> {
         self.pixel_data.view()
     }
 

@@ -1,15 +1,17 @@
-use ndarray::{Array2, Array4, Axis};
+//! Conversions between crate data types
 use anyhow::Result;
+use ndarray::{Array2, Array4, ArrayView2, Axis};
 
 use crate::l0b_packet::{L0bPacket, mq00::MQ00};
 
+/// Turn L0b packets into an MQ00 array, with None where channels aren't active
 pub fn into_mq00_array(packets: Vec<L0bPacket>) -> Array2<Option<MQ00>> {
     let start_time = packets
         .iter()
         .filter_map(|packet| match packet {
             L0bPacket::MQ00(packet) => Some(packet.timestamp_seconds()),
             L0bPacket::MP00(packet) => Some(packet.timestamp_seconds()),
-            _ => None,
+            L0bPacket::MT00(..) => None,
         })
         .min()
         .unwrap_or(0) as usize;
@@ -19,7 +21,7 @@ pub fn into_mq00_array(packets: Vec<L0bPacket>) -> Array2<Option<MQ00>> {
         .filter_map(|packet| match packet {
             L0bPacket::MQ00(packet) => Some(packet.timestamp_seconds()),
             L0bPacket::MP00(packet) => Some(packet.timestamp_seconds()),
-            _ => None,
+            L0bPacket::MT00(..) => None,
         })
         .max()
         .unwrap_or(0) as usize;
@@ -37,19 +39,29 @@ pub fn into_mq00_array(packets: Vec<L0bPacket>) -> Array2<Option<MQ00>> {
                 let channel_index = packet.channel_num() as usize;
                 output[[channel_index, time_index]] = Some(MQ00::from(*packet));
             }
-            _ => {}
+            L0bPacket::MT00(..) => {}
         }
     }
     output
 }
 
-pub fn into_raw_array(packets: Array2<Option<MQ00>>) -> Result<Array4<Option<u16>>> {
+/// Turn MQ00 array into raw pixel data
+pub fn into_raw_array(packets: &ArrayView2<Option<MQ00>>) -> Result<Array4<Option<u16>>> {
     let mut output = Array4::from_elem((16, packets.dim().1, 52, 20), None);
-    for (old_channel, mut new_channel) in packets.axis_iter(Axis(0)).zip(output.axis_iter_mut(Axis(0))) {
-        for (old_packet, mut new_packet) in old_channel.iter().zip(new_channel.axis_iter_mut(Axis(0))) {
+    for (old_channel, mut new_channel) in packets
+        .axis_iter(Axis(0))
+        .zip(output.axis_iter_mut(Axis(0)))
+    {
+        for (old_packet, mut new_packet) in
+            old_channel.iter().zip(new_channel.axis_iter_mut(Axis(0)))
+        {
             if let Some(packet) = old_packet {
                 let pixel_data = packet.pixel_data()?;
-                for (old_pixel, new_pixel) in pixel_data.iter().flat_map(|row| row.iter()).zip(new_packet.iter_mut()) {
+                for (old_pixel, new_pixel) in pixel_data
+                    .iter()
+                    .flat_map(|row| row.iter())
+                    .zip(new_packet.iter_mut())
+                {
                     *new_pixel = Some(*old_pixel);
                 }
             }
