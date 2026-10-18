@@ -1,12 +1,12 @@
-[package]
-name = "ddm_compression"
-version = "0.1.0"
-edition = "2024"
+[workspace]
+resolver = "3"
+members = ["ddm_core"]
 
-[lints.rust]
+[workspace.lints.rust]
 unused_qualifications = "warn"
+missing_docs = "deny"
 
-[lints.clippy]
+[workspace.lints.clippy]
 all = { level = "deny", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
 suspicious = { level = "warn", priority = -1 }
@@ -23,51 +23,6 @@ needless_pass_by_value = "warn"
 manual_let_else = "warn"
 enum_glob_use = "warn"
 allow_attributes = "warn"
+use_self = "warn"
+new_without_default = "allow"
 # missing_docs_in_private_items = "warn"
-
-[profile.release]
-opt-level = 3
-lto = "fat"
-panic = "abort"
-strip = true
-
-[profile.bench]
-opt-level = 3
-lto = "fat"
-
-[dependencies]
-anyhow = "1.0.104"
-bitstream-io = "4.10.0"
-ciborium = "0.2.2"
-clap = { version = "4.6.7", features = ["derive"] }
-iced = {version = "0.14.0", features = ["tokio", "svg"] }
-iced_aw = "0.14.1"
-ndarray = { version = "0.17.2", features = ["serde"] }
-rfd = "0.17.2"
-serde = "1.0.229"
-tokio = { version = "1.53.3", features = ["full"] }
-tracing = "0.1.44"
-tracing-subscriber = "0.3.23"
-zstd = "0.14.2"
-
-[dev-dependencies]
-rand = "0.10.3"
-proptest = "1.12.0"
-criterion = "0.8.2"
-tempfile = "3.27.0"
-
-[[bench]]
-name = "mp00"
-harness = false
-
-[[bench]]
-name = "mt00"
-harness = false
-
-[[bench]]
-name = "mq00"
-harness = false
-
-[[bench]]
-name = "l0b"
-harness = false
