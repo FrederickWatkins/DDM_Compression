@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc e207a8106e1c620c5d3e640100fa4beb9bcd9cc1dfb86c75b450c5b397abb861 # shrinks to packets = [MQ00(MQ00 { channel_num: 0, status_flag: 0, ll_quantisation: 0, detail_quantisation: 0, timestamp_seconds: 0, timestamp_clocks: 0, pixel_data: [[0, 0, 0, 0, 0, ..., 0, 0, 0, 0, 0],  [0, 0, 0, 0, 0, ..., 0, 0, 0, 0, 0],  [0, 0, 0, 0, 0, ..., 0, 0, 0, 0, 0],  [0, 0, 0, 0, 0, ..., 0, 0, 0, 0, 0],  [0, 0, 0, 0, 0, ..., 0, 0, 0, 0, 0],  ...,  [14653, 29041, 19427, 1503, 48862, ..., 38362, 57707, 49584, 52130, 33332],  [42446, 34218, 42782, 56668, 52458, ..., 63823, 43226, 17163, 49806, 7013],  [29810, 55785, 41742, 60169, 45652, ..., 17776, 32732, 6468, 38006, 4342],  [19205, 32561, 34095, 4609, 50028, ..., 13070, 47946, 39707, 35527, 54168],  [15177, 20380, 33108, 39873, 61529, ..., 47543, 30379, 28247, 31466, 38638]], shape=[52, 20], strides=[20, 1], layout=Cc (0x5), const ndim=2 })]

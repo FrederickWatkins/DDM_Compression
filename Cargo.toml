@@ -3,20 +3,71 @@ name = "ddm_compression"
 version = "0.1.0"
 edition = "2024"
 
+[lints.rust]
+unused_qualifications = "warn"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+suspicious = { level = "warn", priority = -1 }
+
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+must_use_candidate = "allow"
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+unreachable = "warn"
+allow_attributes_without_reason = "warn"
+needless_pass_by_value = "warn"
+manual_let_else = "warn"
+enum_glob_use = "warn"
+allow_attributes = "warn"
+# missing_docs_in_private_items = "warn"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+panic = "abort"
+strip = true
+
+[profile.bench]
+opt-level = 3
+lto = "fat"
+
 [dependencies]
 anyhow = "1.0.104"
-bincode = { version = "2", features = ["serde"] }
-cabac = "0.15.0"
+bitstream-io = "4.10.0"
+ciborium = "0.2.2"
 clap = { version = "4.6.7", features = ["derive"] }
-comfy-table = "8.0.1"
-constriction = "0.5.0"
-eframe = "0.36.2"
-egui_plot = "0.37.0"
-ndarray = { version = "0.16.1", features = ["serde"] }
-osclet = "0.4.3"
-proptest = "1.11.0"
-serde = { version = "1.0.229", features = ["derive"] }
-serde-big-array = "0.5.1"
+iced = {version = "0.14.0", features = ["tokio", "svg"] }
+iced_aw = "0.14.1"
+ndarray = { version = "0.17.2", features = ["serde"] }
+rfd = "0.17.2"
+serde = "1.0.229"
+tokio = { version = "1.53.3", features = ["full"] }
 tracing = "0.1.44"
 tracing-subscriber = "0.3.23"
-zstd = "0.14.0"
+zstd = "0.14.2"
+
+[dev-dependencies]
+rand = "0.10.3"
+proptest = "1.12.0"
+criterion = "0.8.2"
+tempfile = "3.27.0"
+
+[[bench]]
+name = "mp00"
+harness = false
+
+[[bench]]
+name = "mt00"
+harness = false
+
+[[bench]]
+name = "mq00"
+harness = false
+
+[[bench]]
+name = "l0b"
+harness = false

@@ -1,0 +1,78 @@
+use std::io::{Cursor, Read, Seek, Write};
+
+use criterion::{Criterion, Throughput, criterion_group, criterion_main};
+use ddm_compression::{
+    DDMPixelData,
+    l0b_packet::{Decode, Encode, mp00},
+};
+use rand::rngs::StdRng;
+use rand::{RngExt, SeedableRng};
+
+const NUM_PACKETS: usize = 100;
+
+fn encode_multiple<W: Write + Seek>(writer: &mut W, packets: &[mp00::MP00]) {
+    for packet in packets {
+        packet.encode(writer).unwrap();
+    }
+}
+
+fn decode_multiple<R: Read + Seek>(reader: &mut R, count: usize) -> Vec<mp00::MP00> {
+    (0..count)
+        .map(|_| mp00::MP00::decode(reader).unwrap())
+        .collect()
+}
+
+fn make_packets(num_packets: usize) -> Vec<mp00::MP00> {
+    let mut rng = StdRng::seed_from_u64(42);
+
+    (0..num_packets)
+        .map(|_| {
+            let mut pixel_data: DDMPixelData = [[0; _]; _];
+
+            for row in &mut pixel_data {
+                for pixel in row {
+                    *pixel = rng.random_range(1000..1200);
+                }
+            }
+
+            mp00::MP00::new(1, 0, 0, 6_332_524, 2_354_353, pixel_data)
+        })
+        .collect()
+}
+
+pub fn mp00(c: &mut Criterion) {
+    let packets = make_packets(NUM_PACKETS);
+
+    // Encode once outside the timed benchmarks.
+    let mut encoded = Vec::new();
+    let mut cursor = Cursor::new(&mut encoded);
+    encode_multiple(&mut cursor, &packets);
+    let total_bytes = encoded.len();
+
+    let mut group = c.benchmark_group("mp00");
+
+    group.throughput(Throughput::ElementsAndBytes {
+        elements: u64::try_from(packets.len()).expect("packet count fits in u64"),
+        bytes: u64::try_from(total_bytes).expect("encoded size fits in u64"),
+    });
+
+    group.bench_function("encode", |b| {
+        b.iter(|| {
+            let mut writer = Cursor::new(Vec::with_capacity(total_bytes));
+            encode_multiple(&mut writer, &packets);
+            writer
+        });
+    });
+
+    group.bench_function("decode", |b| {
+        b.iter(|| {
+            let mut reader = Cursor::new(&encoded);
+            decode_multiple(&mut reader, NUM_PACKETS)
+        });
+    });
+
+    group.finish();
+}
+
+criterion_group!(benches, mp00);
+criterion_main!(benches);
