@@ -5,6 +5,8 @@ edition = "2024"
 
 [features]
 serde = ["dep:serde", "serde/derive", "ndarray/serde"]
+proptest = ["dep:proptest", "dep:proptest-derive"]
+
 [lints]
 workspace = true
 
@@ -12,7 +14,10 @@ workspace = true
 binrw = "0.15"
 ndarray = "0.17"
 serde = { version = "1", optional = true }
-thiserror = "2.0.21"
+thiserror = "2"
+proptest = { version = "1", optional = true }
+proptest-derive = { version = "0.9", optional = true }
 
 [dev-dependencies]
-proptest = "1.12.0"
+proptest = "1"
+proptest-derive = "0.9"
