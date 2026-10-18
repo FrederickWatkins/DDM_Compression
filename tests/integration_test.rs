@@ -3,7 +3,7 @@ use std::io::Cursor;
 use anyhow::{Result, anyhow};
 use ddm_compression::{
     DDMPixelData,
-    convert::{into_mq00_array, into_raw_array},
+    utils::conversion::{into_mq00_array, into_raw_array},
     l0b_packet::{Encode, L0bPacket, decode_all, mp00::MP00, mq00::MQ00, mt00::MT00},
 };
 

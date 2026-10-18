@@ -22,7 +22,6 @@ struct QuantisationConfiguration {
     ll: u8,
     detail: u8,
     decoded: Option<MQ00>,
-    wavelet_coded: Option<MQ00>,
     encoded_size: Option<usize>,
 }
 
@@ -32,7 +31,6 @@ impl QuantisationConfiguration {
             ll,
             detail,
             decoded: None,
-            wavelet_coded: None,
             encoded_size: None,
         };
         configuration.recalculate(packet);
@@ -51,21 +49,18 @@ impl QuantisationConfiguration {
 
     fn recalculate(&mut self, packet: &MQ00) {
         (self.decoded, self.encoded_size) = quantised_round_trip(packet, self.ll, self.detail);
-        self.wavelet_coded = self.decoded.as_ref().map(wavelet_coded);
     }
 }
 
 #[derive(Debug)]
 pub(super) struct DdmAnalyzer {
     packet: MQ00,
-    wavelet_coded_packet: MQ00,
     configurations: Vec<QuantisationConfiguration>,
     mp00_encoded_size: Option<usize>,
 }
 
 impl DdmAnalyzer {
     pub(super) fn new(packet: MQ00) -> Self {
-        let wavelet_coded_packet = wavelet_coded(&packet);
         let mp00_encoded_size = MP00::try_from(&packet)
             .ok()
             .and_then(|mp00| encode_size(&mp00));
@@ -77,7 +72,6 @@ impl DdmAnalyzer {
 
         Self {
             packet,
-            wavelet_coded_packet,
             configurations,
             mp00_encoded_size,
         }
@@ -167,6 +161,10 @@ impl DdmAnalyzer {
             })
             .step(1.0_f32)
             .style(super::super::style::slider_style),
+            text(distortion_summary(
+                &self.packet,
+                configuration.decoded.as_ref()
+            )),
             text(self.compression_summary(configuration.encoded_size)),
             button("Remove").on_press(Message::RemoveConfiguration(index)),
         ]
@@ -210,7 +208,7 @@ impl DdmAnalyzer {
     }
 
     fn original_panel(&self) -> Element<'_, Message> {
-        packet_panel("Original", &self.packet, &self.wavelet_coded_packet)
+        packet_panel("Original", &self.packet)
     }
 
     fn configuration_panel(configuration: &QuantisationConfiguration) -> Element<'_, Message> {
@@ -222,16 +220,23 @@ impl DdmAnalyzer {
             || text("Unavailable").into(),
             |packet| heatmap::view(&packet.raw_pixel_data(), 10.0, 5.0),
         );
-        let wavelet_view: Element<'static, Message> =
-            configuration.wavelet_coded.as_ref().map_or_else(
-                || text("Unavailable").into(),
-                |packet| heatmap::view(&packet.raw_pixel_data(), 10.0, 5.0),
-            );
+        let dc_adjusted = configuration.decoded.as_ref().and_then(dc_adjusted);
+        let dc_adjusted_view: Element<'static, Message> = dc_adjusted.as_ref().map_or_else(
+            || text("Unavailable").into(),
+            |packet| heatmap::view(&packet.raw_pixel_data(), 10.0, 5.0),
+        );
+        let wavelet_view: Element<'static, Message> = dc_adjusted.as_ref().map_or_else(
+            || text("Unavailable").into(),
+            |packet| heatmap::view(&wavelet_coded(packet).raw_pixel_data(), 10.0, 5.0),
+        );
 
         column![
             text(title),
+            text("Round trip data"),
             decoded_view,
-            text("Wavelet coded"),
+            text("DC adjusted"),
+            dc_adjusted_view,
+            text("Wavelet transformed DC adjusted"),
             wavelet_view,
         ]
         .spacing(6)
@@ -239,19 +244,68 @@ impl DdmAnalyzer {
     }
 }
 
-fn packet_panel<'a>(
-    title: &'a str,
-    packet: &'a MQ00,
-    wavelet_packet: &'a MQ00,
-) -> Element<'a, Message> {
+fn distortion_summary(original: &MQ00, round_trip: Option<&MQ00>) -> String {
+    let Some(round_trip) = round_trip else {
+        return "MSE: unavailable\nRMSE: unavailable\nPSNR: unavailable".to_owned();
+    };
+
+    let original = original.raw_pixel_data();
+    let round_trip = round_trip.raw_pixel_data();
+    let count = original.len();
+    if count == 0 || count != round_trip.len() {
+        return "MSE: unavailable\nRMSE: unavailable\nPSNR: unavailable".to_owned();
+    }
+
+    let squared_error_sum = original
+        .iter()
+        .zip(round_trip.iter())
+        .map(|(&expected, &actual)| {
+            let error = f64::from(expected) - f64::from(actual);
+            error * error
+        })
+        .sum::<f64>();
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "the pixel count is fixed to the small DDM dimensions"
+    )]
+    let mse = squared_error_sum / count as f64;
+    let rmse = mse.sqrt();
+    let psnr = if mse == 0.0 {
+        f64::INFINITY
+    } else {
+        20.0 * (f64::from(u16::MAX) / rmse).log10()
+    };
+
+    format!("MSE: {mse:.4}\nRMSE: {rmse:.4}\nPSNR: {psnr:.2} dB")
+}
+
+fn packet_panel<'a>(title: &'a str, packet: &'a MQ00) -> Element<'a, Message> {
+    let dc_adjusted = dc_adjusted(packet);
+    let dc_adjusted_view: Element<'static, Message> = dc_adjusted.as_ref().map_or_else(
+        || text("Unavailable").into(),
+        |packet| heatmap::view(&packet.raw_pixel_data(), 10.0, 5.0),
+    );
+    let wavelet_view: Element<'static, Message> = dc_adjusted.as_ref().map_or_else(
+        || text("Unavailable").into(),
+        |packet| heatmap::view(&wavelet_coded(packet).raw_pixel_data(), 10.0, 5.0),
+    );
     column![
         text(title),
+        text("Untransformed data"),
         heatmap::view(&packet.raw_pixel_data(), 10.0, 5.0),
-        text("Wavelet coded"),
-        heatmap::view(&wavelet_packet.raw_pixel_data(), 10.0, 5.0),
+        text("DC adjusted"),
+        dc_adjusted_view,
+        text("Wavelet transformed DC adjusted"),
+        wavelet_view,
     ]
     .spacing(6)
     .into()
+}
+
+fn dc_adjusted(packet: &MQ00) -> Option<MQ00> {
+    let mut adjusted = packet.clone();
+    adjusted.dc_adjust().ok()?;
+    Some(adjusted)
 }
 
 fn wavelet_coded(packet: &MQ00) -> MQ00 {

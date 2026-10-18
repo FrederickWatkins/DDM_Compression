@@ -48,9 +48,9 @@
 //! );
 //! // Output:
 //! // Original size: 2092
-//! // Encoded size: 1160
-//! // Compression ratio: 1.80
-//! // 1.32x better than MP00 with no quantization
+//! // Encoded size: 1132
+//! // Compression ratio: 1.85
+//! // 1.35x better than MP00 with no quantization
 //! ```
 use std::io::{Read, Seek, Write};
 
@@ -123,7 +123,7 @@ impl From<MP00> for MQ00 {
 impl Decode for MQ00 {
     fn decode<R: Read + Seek>(reader: &mut R) -> Result<Self> {
         let start_pos = reader.stream_position()?;
-        let mut header_buf = [0u8; 12];
+        let mut header_buf = [0u8; 14];
 
         reader.read_exact(&mut header_buf)?;
         let header_version = header_buf[0];
@@ -132,6 +132,7 @@ impl Decode for MQ00 {
         let pixel_quantisation = header_buf[3];
         let timestamp_seconds = u32::from_be_bytes(header_buf[4..8].try_into()?);
         let timestamp_clocks = i32::from_be_bytes(header_buf[8..12].try_into()?);
+        let dc_offset = u16::from_be_bytes(header_buf[12..14].try_into()?);
 
         if header_version != HEADER_VERSION {
             return Err(anyhow!(
@@ -171,6 +172,8 @@ impl Decode for MQ00 {
 
         output.idwt();
 
+        output.inverse_dc_adjust(dc_offset);
+
         let reader = decoder.into_inner().into_reader();
         let bytes_decoded = reader.stream_position()? - start_pos;
         if !bytes_decoded.is_multiple_of(4) {
@@ -187,8 +190,13 @@ impl Decode for MQ00 {
 
 impl Encode for MQ00 {
     fn encode<W: Write + Seek>(&self, writer: &mut W) -> Result<()> {
+        let mut copy = self.clone();
+
         let start_pos = writer.stream_position()?;
-        let mut header_buf = [0u8; 12];
+
+        let dc_offset: u16 = copy.dc_adjust()?;
+
+        let mut header_buf = [0u8; 14];
 
         header_buf[0] = HEADER_VERSION;
         header_buf[1] = self.channel_num;
@@ -196,10 +204,9 @@ impl Encode for MQ00 {
         header_buf[3] = self.detail_quantisation << 4 | self.ll_quantisation;
         header_buf[4..8].copy_from_slice(&self.timestamp_seconds.to_be_bytes());
         header_buf[8..12].copy_from_slice(&self.timestamp_clocks.to_be_bytes());
+        header_buf[12..14].copy_from_slice(&dc_offset.to_be_bytes());
 
         writer.write_all(&header_buf)?;
-
-        let mut copy = self.clone();
 
         copy.dwt();
 
@@ -338,6 +345,26 @@ impl MQ00 {
     /// DDM pixel data
     pub fn raw_pixel_data(&self) -> ArrayView2<'_, i32> {
         self.pixel_data.view()
+    }
+
+    /// Apply DC adjustment
+    /// 
+    /// Returns adjustment offset
+    pub fn dc_adjust(&mut self) -> Result<u16> {
+        let dc_offset = self.pixel_data.mean().ok_or(anyhow!("Number of elements too large for usize"))?.try_into()?;
+        for pixel in &mut self.pixel_data {
+            *pixel -= i32::from(dc_offset);
+        }
+        Ok(dc_offset)
+    }
+
+    /// Inverse DC adjustment
+    /// 
+    /// Returns adjustment offset
+    pub fn inverse_dc_adjust(&mut self, dc_offset: u16) {
+        for pixel in &mut self.pixel_data {
+            *pixel += i32::from(dc_offset);
+        }
     }
 
     /// Apply 2D wavelet transform
