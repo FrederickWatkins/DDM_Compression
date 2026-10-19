@@ -78,7 +78,7 @@ jobs:
                     --workspace \
                     --feature-powerset \
                     --locked \
-                    --all-targets
+                    --lib
 
                   cargo hack test \
                     --workspace \

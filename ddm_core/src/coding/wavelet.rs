@@ -419,6 +419,7 @@ mod tests {
         ) {
             let axes: Vec<_> = axes.iter().filter(|&&x| x < data.ndim()).map(|&x| Axis(x)).collect();
             let mut transformed = data.clone();
+            #[expect(clippy::unwrap_used, reason = "Min number of axes is 1")]
             let len = transformed.shape().iter().max().unwrap();
             let s_cap = len.div_ceil(2) + 1;
             let d_cap = len / 2;
