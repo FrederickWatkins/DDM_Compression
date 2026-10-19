@@ -5,9 +5,9 @@ use alloc::boxed::Box;
 
 use binrw::{
     BinRead, BinResult, BinWrite,
-    Endian::Big,
+    Endian::{Big, Little},
     io::{Read, Seek, Write},
-    meta::{EndianKind, ReadEndian, WriteEndian},
+    meta::{EndianKind, ReadEndian, WriteEndian, WriteMagic as _},
 };
 use ndarray::{Array2, ArrayView2, Dim, ShapeBuilder};
 
@@ -35,7 +35,7 @@ impl<const WIDTH: usize, const HEIGHT: usize> DDMEncoder<WIDTH, HEIGHT>
 {
     type Packet = MP00Packet<WIDTH, HEIGHT>;
 
-    fn encode(&mut self, frame: &DDMFrame<WIDTH, HEIGHT>) -> Result<Self::Packet, EncodingError> {
+    fn encode(&mut self, frame: DDMFrame<WIDTH, HEIGHT>) -> Result<Self::Packet, EncodingError> {
         let header = MP00Header {
             channel: frame.metadata.channel,
             status_flag: frame.metadata.status_flag,
@@ -113,24 +113,20 @@ impl<const WIDTH: usize, const HEIGHT: usize> BinRead for MP00Packet<WIDTH, HEIG
         endian: binrw::Endian,
         args: Self::Args<'_>,
     ) -> BinResult<Self> {
-        let mut crc_reader = CrcReader::new(reader);
+        let mut crc_prefix = [0u8; 8];
+        crc_prefix[0..4].copy_from_slice(&super::L0bPacket::<WIDTH, HEIGHT>::MAGIC.to_be_bytes());
+        crc_prefix[4..8].copy_from_slice(b"MP00");
+        let mut crc_reader = CrcReader::new_with_prefix(reader, &crc_prefix);
         let header = MP00Header::read_options(&mut crc_reader, endian, args)?;
 
         let start_pos = crc_reader.stream_position()?;
         let pixel_data = decode_pixel_data(&mut crc_reader, [HEIGHT, WIDTH])?;
         let end_pos = crc_reader.stream_position()?;
 
-        // Align the stream back to a multiple of 4
-        let bytes_decoded = end_pos - start_pos;
-        if !bytes_decoded.is_multiple_of(4) {
-            let target_distance = 4 - (bytes_decoded % 4);
-            #[expect(clippy::cast_possible_wrap, reason = "Target distance max value is 3")]
-            crc_reader.seek_relative(target_distance as i64)?;
-        }
-
         let calculated_crc = crc_reader.finalize();
 
-        let crc = u32::read_options(reader, endian, args)?;
+        // The CRC immediately follows the encoded pixels and is stored little-endian.
+        let crc = u32::read_options(reader, Little, args)?;
         if crc != calculated_crc {
             return Err(binrw::Error::Custom {
                 pos: end_pos,
@@ -139,6 +135,14 @@ impl<const WIDTH: usize, const HEIGHT: usize> BinRead for MP00Packet<WIDTH, HEIG
                     calculated_crc,
                 }),
             });
+        }
+
+        // Align the complete packet after its CRC.
+        let bytes_with_crc = (end_pos - start_pos) + 4;
+        if !bytes_with_crc.is_multiple_of(4) {
+            let target_distance = 4 - (bytes_with_crc % 4);
+            #[expect(clippy::cast_possible_wrap, reason = "Target distance max value is 3")]
+            reader.seek_relative(target_distance as i64)?;
         }
 
         Ok(Self { header, pixel_data })
@@ -154,7 +158,10 @@ impl<const WIDTH: usize, const HEIGHT: usize> BinWrite for MP00Packet<WIDTH, HEI
         endian: binrw::Endian,
         args: Self::Args<'_>,
     ) -> BinResult<()> {
-        let mut crc_writer = CrcWriter::new(writer);
+        let mut crc_prefix = [0u8; 8];
+        crc_prefix[0..4].copy_from_slice(&super::L0bPacket::<WIDTH, HEIGHT>::MAGIC.to_be_bytes());
+        crc_prefix[4..8].copy_from_slice(b"MP00");
+        let mut crc_writer = CrcWriter::new_with_prefix(writer, &crc_prefix);
         self.header.write_options(&mut crc_writer, endian, args)?;
 
         let start_pos = crc_writer.stream_position()?;
@@ -163,18 +170,19 @@ impl<const WIDTH: usize, const HEIGHT: usize> BinWrite for MP00Packet<WIDTH, HEI
 
         let crc = crc_writer.finalize();
 
-        // Align the stream back to a multiple of 4
+        crc.write_options(writer, Little, args)?;
+
+        // Align the complete packet after its CRC.
         let bytes_encoded = end_pos - start_pos;
-        if !bytes_encoded.is_multiple_of(4) {
-            let target_distance = 4 - (bytes_encoded % 4);
+        let bytes_with_crc = bytes_encoded + 4;
+        if !bytes_with_crc.is_multiple_of(4) {
+            let target_distance = 4 - (bytes_with_crc % 4);
             #[expect(
                 clippy::cast_possible_truncation,
                 reason = "Target distance max value is 3"
             )]
             writer.write_all(&[0u8; 3][..target_distance as usize])?;
         }
-
-        crc.write_options(writer, endian, args)?;
         Ok(())
     }
 }
@@ -319,11 +327,11 @@ mod tests {
 
     proptest! {
         #[test]
-        fn full_round_trip(frames in proptest::collection::vec(any::<DDMFrame<20, 52>>(), 1..20)) {
+        fn full_round_trip(frames in proptest::collection::vec(any::<DDMFrame<20, 52>>(), 1..200)) {
             let mut encoder = MP00Encoder::new(0);
             let mut buf = vec![];
             let mut cursor = Cursor::new(&mut buf);
-            for frame in &frames {
+            for frame in frames.clone() {
                 encoder.encode(frame)?.write(&mut cursor)?;
             }
             let mut decoder = MP00Decoder::new();
@@ -340,10 +348,10 @@ mod tests {
         }
 
         #[test]
-        fn encode_round_trip(frames in proptest::collection::vec(any::<DDMFrame<20, 52>>(), 1..20)) {
+        fn encode_round_trip(frames in proptest::collection::vec(any::<DDMFrame<20, 52>>(), 1..200)) {
             let mut encoder = MP00Encoder::new(0);
             let mut packets = vec![];
-            for frame in &frames {
+            for frame in frames.clone() {
                 packets.push(encoder.encode(frame)?);
             }
             let mut decoder = MP00Decoder::new();
@@ -355,7 +363,7 @@ mod tests {
         }
 
         #[test]
-        fn bytestream_round_trip(packets in proptest::collection::vec(any::<MP00Packet<20, 52>>(), 1..20)) {
+        fn bytestream_round_trip(packets in proptest::collection::vec(any::<MP00Packet<20, 52>>(), 1..200)) {
             let mut buf = vec![];
             let mut cursor = Cursor::new(&mut buf);
             for packet in &packets {
@@ -370,63 +378,3 @@ mod tests {
         }
     }
 }
-
-// #[cfg(all(test, not(feature = "std")))]
-// mod tests {
-//     use super::*;
-
-//     #[test]
-//     fn full_round_trip() {
-//         let mut encoder = MP00Encoder::new(0);
-//         let mut buf = vec![];
-//         let mut cursor = Cursor::new(&mut buf);
-//         for frame in &frames {
-//             encoder.encode(frame)?.write(&mut cursor)?;
-//         }
-//         let mut decoder = MP00Decoder::new();
-//         let mut decoded_frames = vec![];
-//         let mut cursor = Cursor::new(cursor.into_inner());
-//         loop {
-//             match MP00Packet::read(&mut cursor) {
-//                 Ok(packet) => decoded_frames.push(decoder.decode(packet)?),
-//                 Err(binrw::Error::Io(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof =>
-// break,                 Err(e) => return Err(e.into()),
-//             }
-//         }
-//         prop_assert_eq!(frames, decoded_frames);
-//     }
-
-//     #[test]
-//     fn encode_round_trip() {
-//         let mut encoder = MP00Encoder::new(0);
-//         let mut packets = vec![];
-//         for frame in &frames {
-//             packets.push(encoder.encode(frame)?);
-//         }
-//         let mut decoder = MP00Decoder::new();
-//         let mut decoded_frames = vec![];
-//         for packet in packets {
-//             decoded_frames.push(decoder.decode(packet)?);
-//         }
-//         prop_assert_eq!(frames, decoded_frames);
-//     }
-
-//     #[test]
-//     fn bytestream_round_trip() {
-//         let mut buf = vec![];
-//         let mut cursor = Cursor::new(&mut buf);
-//         for packet in &packets {
-//             packet.write(&mut cursor)?;
-//         }
-//         let mut decoded_packets = vec![];
-//         let mut cursor = Cursor::new(cursor.into_inner());
-//         loop {
-//             match MP00Packet::read(&mut cursor) {
-//                 Ok(packet) => decoded_packets.push(packet),
-//                 Err(binrw::Error::Io(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof =>
-// break,                 Err(e) => return Err(e.into()),
-//             }
-//         }
-//         prop_assert_eq!(packets, decoded_packets);
-//     }
-// }

@@ -11,10 +11,17 @@ pub struct CrcWriter<'a, W> {
 impl<'a, W> CrcWriter<'a, W> {
     /// Create new CRC writer
     pub fn new(inner: &'a mut W) -> Self {
-        Self {
-            inner,
-            hasher: Hasher::new(),
-        }
+        Self::new_with_prefix(inner, &[])
+    }
+
+    /// Create a CRC writer, including bytes that have already been written in the checksum.
+    ///
+    /// This is useful when a framing layer writes a header before the payload writer is
+    /// constructed, but the protocol checksum covers both the framing header and payload.
+    pub fn new_with_prefix(inner: &'a mut W, prefix: &[u8]) -> Self {
+        let mut hasher = Hasher::new();
+        hasher.update(prefix);
+        Self { inner, hasher }
     }
 
     /// Finish hashing data and return CRC
@@ -49,10 +56,17 @@ pub struct CrcReader<'a, R> {
 impl<'a, R> CrcReader<'a, R> {
     /// Create new CRC reader
     pub fn new(inner: &'a mut R) -> Self {
-        Self {
-            inner,
-            hasher: Hasher::new(),
-        }
+        Self::new_with_prefix(inner, &[])
+    }
+
+    /// Create a CRC reader, including bytes that have already been read by a framing layer.
+    ///
+    /// This is useful when a framing layer consumes a header before the payload reader is
+    /// constructed, but the protocol checksum covers both the framing header and payload.
+    pub fn new_with_prefix(inner: &'a mut R, prefix: &[u8]) -> Self {
+        let mut hasher = Hasher::new();
+        hasher.update(prefix);
+        Self { inner, hasher }
     }
 
     /// Finish hashing data and return CRC

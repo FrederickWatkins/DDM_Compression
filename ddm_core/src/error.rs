@@ -1,6 +1,6 @@
 //! Library error types
 
-use crate::l0b::{EncodingError};
+use crate::l0b::EncodingError;
 
 /// Library result type
 pub type Result<T> = core::result::Result<T, Error>;

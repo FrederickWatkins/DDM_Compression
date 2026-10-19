@@ -198,7 +198,7 @@ impl<W: BitWrite> CabacEncoder<W> {
     }
 
     /// Encode a single bit
-    /// 
+    ///
     /// # Errors
     /// Passes along any I/O error from the underlying stream.
     pub fn encode_decision(&mut self, bin_val: bool, ctx: &mut CabacContext) -> Result<()> {
@@ -224,7 +224,7 @@ impl<W: BitWrite> CabacEncoder<W> {
     ///
     /// This function must be called after all bits have been encoded, otherwise the encoded buffer
     /// will be incomplete
-    /// 
+    ///
     /// # Errors
     /// Passes along any I/O error from the underlying stream.
     pub fn encode_flush(&mut self) -> Result<()> {
@@ -237,7 +237,7 @@ impl<W: BitWrite> CabacEncoder<W> {
     }
 
     /// Renormalize the range and write resolved bits
-    /// 
+    ///
     /// # Errors
     /// Passes along any I/O error from the underlying stream.
     fn renorm_e(&mut self) -> Result<()> {
@@ -258,7 +258,7 @@ impl<W: BitWrite> CabacEncoder<W> {
     }
 
     /// Write resolved bits
-    /// 
+    ///
     /// # Errors
     /// Passes along any I/O error from the underlying stream.
     fn put_bit(&mut self, bit: bool) -> Result<()> {
@@ -293,7 +293,7 @@ impl<R> CabacDecoder<R> {
 
 impl<R: BitRead> CabacDecoder<R> {
     /// Create a new CABAC decoder, passing it a reader
-    /// 
+    ///
     /// # Errors
     /// Passes along any I/O error from the underlying stream.
     pub fn new(mut reader: R) -> Result<Self> {
@@ -307,7 +307,7 @@ impl<R: BitRead> CabacDecoder<R> {
     }
 
     /// Decode a single bit
-    /// 
+    ///
     /// # Errors
     /// Passes along any I/O error from the underlying stream.
     pub fn decode_decision(&mut self, ctx: &mut CabacContext) -> Result<bool> {
@@ -332,7 +332,7 @@ impl<R: BitRead> CabacDecoder<R> {
     }
 
     /// Renormalize the range and slide in bits from input
-    /// 
+    ///
     /// # Errors
     /// Passes along any I/O error from the underlying stream.
     fn renorm_d(&mut self) -> Result<()> {
@@ -365,25 +365,25 @@ mod tests {
             for &x in &data {
                 for bit_idx in 0..64 {
                     let bit = (x & (1 << (63 - bit_idx))) != 0;
-                    encoder.encode_decision(bit, &mut ctx).unwrap();
+                    encoder.encode_decision(bit, &mut ctx)?;
                 }
             }
 
-            encoder.encode_flush().unwrap();
+            encoder.encode_flush()?;
             let mut writer = encoder.into_inner();
-            writer.byte_align().unwrap();
+            writer.byte_align()?;
 
             let encoded_data = writer.into_writer().into_inner();
 
             // Decode back into a Vec<u64> by grouping every 64 decoded bits
             let reader = BitReader::endian(Cursor::new(encoded_data), BigEndian);
             let mut ctx = CabacContext::new();
-            let mut decoder = CabacDecoder::new(reader).unwrap();
+            let mut decoder = CabacDecoder::new(reader)?;
 
             let mut decoded_data = vec![0u64; data.len()];
             for x in &mut decoded_data {
                 for bit_idx in 0..64 {
-                    let bit = decoder.decode_decision(&mut ctx).unwrap();
+                    let bit = decoder.decode_decision(&mut ctx)?;
                     if bit {
                         *x |= 1 << (63 - bit_idx);
                     }

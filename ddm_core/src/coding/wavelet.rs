@@ -10,7 +10,10 @@ use ndarray::{ArrayViewMut, ArrayViewMut1, Axis, Dimension};
 ///
 /// DOI: 10.1109/PACRIM.2001.953547
 #[cfg(any(feature = "alloc", feature = "std"))]
-#[expect(clippy::missing_panics_doc, reason = "panics on unreachable code paths")]
+#[expect(
+    clippy::missing_panics_doc,
+    reason = "panics on unreachable code paths"
+)]
 pub fn dwt_53(array: ArrayViewMut1<i32>) {
     if array.len() < 3 {
         return;
@@ -59,7 +62,10 @@ pub fn dwt_53(array: ArrayViewMut1<i32>) {
 
 /// Inverse 1D DWT wavelet transform
 #[cfg(any(feature = "alloc", feature = "std"))]
-#[expect(clippy::missing_panics_doc, reason = "panics on unreachable code paths")]
+#[expect(
+    clippy::missing_panics_doc,
+    reason = "panics on unreachable code paths"
+)]
 pub fn idwt_53(mut array: ArrayViewMut1<i32>) {
     if array.len() < 3 {
         return;
@@ -138,7 +144,7 @@ pub fn idwt_53_nd<D: Dimension>(mut array: ArrayViewMut<i32, D>, axes: &[Axis]) 
 
 #[cfg(test)]
 mod tests {
-    use std::{ops::Range};
+    use std::ops::Range;
 
     use ndarray::{Array1, ArrayD};
     use proptest::prelude::*;
@@ -153,6 +159,10 @@ mod tests {
         num_dimensions.prop_flat_map(move |ndim| {
             prop::collection::vec(axis_length.clone(), ndim).prop_flat_map({
                 let value = inner_strategy.clone();
+                #[expect(
+                    clippy::unwrap_used,
+                    reason = "Vec is initinalized same size as ndarray"
+                )]
                 move |shape| {
                     let len: usize = shape.iter().product();
                     prop::collection::vec(value.clone(), len)

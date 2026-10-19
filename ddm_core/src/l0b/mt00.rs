@@ -16,8 +16,7 @@ pub struct MT00Packet {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Cursor;
-    use std::vec;
+    use std::{io::Cursor, vec};
 
     use proptest::prelude::*;
 
@@ -25,7 +24,7 @@ mod tests {
 
     proptest! {
         #[test]
-        fn bytestream_round_trip(packets in proptest::collection::vec(any::<MT00Packet>(), 1..10)) {
+        fn bytestream_round_trip(packets in proptest::collection::vec(any::<MT00Packet>(), 1..200)) {
             let mut buf = vec![];
             let mut cursor = Cursor::new(&mut buf);
             for packet in &packets {

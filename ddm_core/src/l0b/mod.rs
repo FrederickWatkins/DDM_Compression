@@ -17,7 +17,7 @@ pub use mt00::MT00Packet;
 pub enum EncodingError {
     /// CRCs don't match
     #[error("encoded CRC {encoded_crc} doesn't match calculated crc {calculated_crc}")]
-    CrcMismatch{
+    CrcMismatch {
         /// CRC encoded in binary data
         encoded_crc: u32,
         /// CRC calculated from data
@@ -25,13 +25,13 @@ pub enum EncodingError {
     },
     /// Encoder/decoder received invalid data
     #[error("invalid input value: {name} must fit into type {var_type}, got {value}")]
-    InvalidInput{
+    InvalidInput {
         /// Name of variable that received invalid data
         name: &'static str,
         /// Intended type of variable
         var_type: &'static str,
         /// Actual value of variable
-        value: i64
+        value: i64,
     },
     /// Configuration variable outside range
     #[error("config {name} must be between {min} and {max}, got {actual}")]
@@ -56,7 +56,7 @@ pub trait DDMEncoder<const WIDTH: usize, const HEIGHT: usize> {
     ///
     /// # Errors
     /// - [`crate::error::Error::Io`] if an IO error occurs on the underlying stream during decoding
-    fn encode(&mut self, frame: &DDMFrame<WIDTH, HEIGHT>) -> Result<Self::Packet, EncodingError>;
+    fn encode(&mut self, frame: DDMFrame<WIDTH, HEIGHT>) -> Result<Self::Packet, EncodingError>;
 }
 
 /// A decoder capable of turning a bitstream into a [`DDMFrame`]
@@ -149,7 +149,6 @@ impl proptest::arbitrary::Arbitrary for DDMFrameMetadata {
     fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
         use proptest::prelude::*;
 
-        #[expect(clippy::expect_used, reason = "Calculation guarantees same size")]
         (0..15u8, any::<u8>(), any::<u32>(), any::<i32>())
             .prop_map(|(channel, status_flag, gps_seconds, sample_clocks)| Self {
                 channel,

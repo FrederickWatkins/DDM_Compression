@@ -7,7 +7,7 @@ use core::iter;
 use binrw::{
     BinRead, BinResult, BinWrite, Endian,
     io::{Read, Seek, Write},
-    meta::{EndianKind, ReadEndian, WriteEndian},
+    meta::{EndianKind, ReadEndian, WriteEndian, WriteMagic as _},
 };
 use bitstream_io::{BigEndian, BitReader, BitWrite, BitWriter};
 use ndarray::{Array2, ArrayView2, ArrayViewMut2, Axis};
@@ -45,9 +45,9 @@ impl MQ00EncoderConfig {
     /// Create new encoder config
     ///
     /// # Errors
-    /// - [`Error::ValueOutOfRange`] if `quantisation` doesn't fit in 1 byte
-    /// - [`Error::ValueOutOfRange`] if `wavelet_stages` doesn't fit in 1 byte
-    /// - [`Error::ValueOutOfRange`] if `gop_length` is 0
+    /// - [`EncodingError::ConfigValueOutOfRange`] if `quantisation` is greater than 15
+    /// - [`EncodingError::ConfigValueOutOfRange`] if `wavelet_stages` doesn't fit in 1 byte
+    /// - [`EncodingError::ConfigValueOutOfRange`] if `gop_length` is 0
     pub fn new(
         quantisation: u8,
         dc_adjust: bool,
@@ -84,11 +84,11 @@ impl MQ00EncoderConfig {
     /// Quantisation in block floating point exponent
     ///
     /// # Errors
-    /// - [`Error::ValueOutOfRange`] if `bits` doesn't fit in 1 byte
+    /// - [`EncodingError::ConfigValueOutOfRange`] if `bits` is greater than 15
     pub fn with_quantisation(mut self, bits: u8) -> Result<Self, EncodingError> {
         if bits & 0xF0 != 0 {
             return Err(EncodingError::ConfigValueOutOfRange {
-                name: "bits",
+                name: "quantisation",
                 min: 0,
                 max: 15,
                 actual: u64::from(bits),
@@ -107,7 +107,7 @@ impl MQ00EncoderConfig {
     /// Number of wavelet coding stages
     ///
     /// # Errors
-    /// - [`Error::ValueOutOfRange`] if `stages` doesn't fit in 1 byte
+    /// - [`EncodingError::ConfigValueOutOfRange`] if `stages` doesn't fit in 1 byte
     pub fn with_wavelet_stages(mut self, stages: u8) -> Result<Self, EncodingError> {
         if stages & 0xF0 != 0 {
             return Err(EncodingError::ConfigValueOutOfRange {
@@ -124,7 +124,7 @@ impl MQ00EncoderConfig {
     /// Length of group of frames
     ///
     /// # Errors
-    /// - [`Error::ValueOutOfRange`] if `gop_length` is 0
+    /// - [`EncodingError::ConfigValueOutOfRange`] if `frames` is 0
     pub fn with_gop_length(mut self, frames: u8) -> Result<Self, EncodingError> {
         if frames == 0 {
             return Err(EncodingError::ConfigValueOutOfRange {
@@ -178,7 +178,7 @@ impl<const WIDTH: usize, const HEIGHT: usize> DDMEncoder<WIDTH, HEIGHT>
 
     fn encode(
         &mut self,
-        frame: &DDMFrame<WIDTH, HEIGHT>,
+        frame: DDMFrame<WIDTH, HEIGHT>,
     ) -> Result<MQ00Packet<WIDTH, HEIGHT>, EncodingError> {
         let packet_kind = if self.packets_since_intra[frame.metadata.channel as usize]
             < self.config.gop_length as usize - 1
@@ -289,11 +289,14 @@ impl<const WIDTH: usize, const HEIGHT: usize> DDMDecoder<WIDTH, HEIGHT>
         let mut pixel_data = Array2::from_elem([HEIGHT, WIDTH], 0);
 
         for (pixel, old_pixel) in pixel_data.iter_mut().zip(pixel_data_i32) {
-            *pixel = u16::try_from(old_pixel).map_err(|_| EncodingError::InvalidInput {
-                name: "pixel",
-                var_type: "u16",
-                value: i64::from(old_pixel),
-            })?;
+            let old_pixel = old_pixel.clamp(0, i32::from(u16::MAX));
+            #[expect(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "The value is clamped to the u16 range"
+            )]
+            let old_pixel = old_pixel as u16;
+            *pixel = old_pixel;
         }
 
         Ok(DDMFrame {
@@ -346,7 +349,7 @@ impl proptest::arbitrary::Arbitrary for MQ00Header {
                     gps_seconds,
                     sample_clocks,
                 )| {
-                    MQ00Header {
+                    Self {
                         channel,
                         status_flag,
                         quantisation_wavelet_stages,
@@ -378,7 +381,10 @@ impl<const WIDTH: usize, const HEIGHT: usize> BinRead for MQ00Packet<WIDTH, HEIG
         endian: Endian,
         args: Self::Args<'_>,
     ) -> BinResult<Self> {
-        let mut crc_reader = CrcReader::new(reader);
+        let mut crc_prefix = [0u8; 8];
+        crc_prefix[0..4].copy_from_slice(&super::L0bPacket::<WIDTH, HEIGHT>::MAGIC.to_be_bytes());
+        crc_prefix[4..8].copy_from_slice(b"MQ00");
+        let mut crc_reader = CrcReader::new_with_prefix(reader, &crc_prefix);
         let header = MQ00Header::read_options(&mut crc_reader, endian, args)?;
 
         let start_pos = crc_reader.stream_position()?;
@@ -393,17 +399,13 @@ impl<const WIDTH: usize, const HEIGHT: usize> BinRead for MQ00Packet<WIDTH, HEIG
         let mut crc_reader = decoder.into_inner().into_reader();
         let end_pos = crc_reader.stream_position()?;
 
-        // Align the stream back to a multiple of 4
-        let bytes_decoded = end_pos - start_pos;
-        if !bytes_decoded.is_multiple_of(4) {
-            let target_distance = 4 - (bytes_decoded % 4);
-            #[expect(clippy::cast_possible_wrap, reason = "Target distance max value is 3")]
-            crc_reader.seek_relative(target_distance as i64)?;
-        }
-
         let calculated_crc = crc_reader.finalize();
 
-        let crc = u32::read_options(reader, endian, args)?;
+        // Align the complete packet after its CRC.
+        let bytes_decoded = (end_pos - start_pos) + 4;
+
+        // The CRC immediately follows the encoded pixels and is stored little-endian.
+        let crc = u32::read_options(reader, Endian::Little, args)?;
         if crc != calculated_crc {
             return Err(binrw::Error::Custom {
                 pos: end_pos,
@@ -412,6 +414,11 @@ impl<const WIDTH: usize, const HEIGHT: usize> BinRead for MQ00Packet<WIDTH, HEIG
                     calculated_crc,
                 }),
             });
+        }
+        if !bytes_decoded.is_multiple_of(4) {
+            let target_distance = 4 - (bytes_decoded % 4);
+            #[expect(clippy::cast_possible_wrap, reason = "Target distance max value is 3")]
+            reader.seek_relative(target_distance as i64)?;
         }
 
         Ok(Self { header, pixel_data })
@@ -427,7 +434,10 @@ impl<const WIDTH: usize, const HEIGHT: usize> BinWrite for MQ00Packet<WIDTH, HEI
         endian: Endian,
         args: Self::Args<'_>,
     ) -> BinResult<()> {
-        let mut crc_writer = CrcWriter::new(writer);
+        let mut crc_prefix = [0u8; 8];
+        crc_prefix[0..4].copy_from_slice(&super::L0bPacket::<WIDTH, HEIGHT>::MAGIC.to_be_bytes());
+        crc_prefix[4..8].copy_from_slice(b"MQ00");
+        let mut crc_writer = CrcWriter::new_with_prefix(writer, &crc_prefix);
         self.header.write_options(&mut crc_writer, endian, args)?;
 
         let start_pos = crc_writer.stream_position()?;
@@ -448,8 +458,10 @@ impl<const WIDTH: usize, const HEIGHT: usize> BinWrite for MQ00Packet<WIDTH, HEI
         let end_pos = crc_writer.stream_position()?;
         let crc = crc_writer.finalize();
 
-        // Align the stream back to a multiple of 4
-        let bytes_encoded = end_pos - start_pos;
+        crc.write_options(writer, Endian::Little, args)?;
+
+        // Align the complete packet after its CRC.
+        let bytes_encoded = end_pos - start_pos + 4;
         if !bytes_encoded.is_multiple_of(4) {
             let target_distance = 4 - (bytes_encoded % 4);
             #[expect(
@@ -458,8 +470,6 @@ impl<const WIDTH: usize, const HEIGHT: usize> BinWrite for MQ00Packet<WIDTH, HEI
             )]
             writer.write_all(&[0u8; 3][..target_distance as usize])?;
         }
-
-        crc.write_options(writer, endian, args)?;
 
         Ok(())
     }
@@ -631,16 +641,16 @@ mod tests {
     proptest! {
         #[test]
         fn full_round_trip(
-            frames in proptest::collection::vec(any::<DDMFrame<20, 52>>(), 50..100),
+            frames in proptest::collection::vec(any::<DDMFrame<20, 52>>(), 1..200),
             dc_adjust in any::<bool>(),
-            wavelet_stages in 0..15u8,
-            gop_length in 1..30u8
+            wavelet_stages in 0..16u8,
+            gop_length in 1..=32u8
         ) {
             let config = MQ00EncoderConfig::new(0, dc_adjust, wavelet_stages, gop_length)?;
             let mut encoder = MQ00Encoder::new(config);
             let mut buf = vec![];
             let mut cursor = Cursor::new(&mut buf);
-            for frame in &frames {
+            for frame in frames.clone() {
                 encoder.encode(frame)?.write(&mut cursor)?;
             }
             let mut decoder = MQ00Decoder::new();
@@ -658,15 +668,15 @@ mod tests {
 
         #[test]
         fn encode_round_trip(
-            frames in proptest::collection::vec(any::<DDMFrame<20, 52>>(), 50..100),
+            frames in proptest::collection::vec(any::<DDMFrame<20, 52>>(), 1..200),
             dc_adjust in any::<bool>(),
-            wavelet_stages in 0..15u8,
-            gop_length in 1..30u8
+            wavelet_stages in 0..16u8,
+            gop_length in 1..=32u8
         ) {
             let config = MQ00EncoderConfig::new(0, dc_adjust, wavelet_stages, gop_length)?;
             let mut encoder = MQ00Encoder::new(config);
             let mut packets = vec![];
-            for frame in &frames {
+            for frame in frames.clone() {
                 packets.push(encoder.encode(frame)?);
             }
             let mut decoder = MQ00Decoder::new();
@@ -678,7 +688,7 @@ mod tests {
         }
 
         #[test]
-        fn bytestream_round_trip(packets in proptest::collection::vec(any::<MQ00Packet<20, 52>>(), 1..20)) {
+        fn bytestream_round_trip(packets in proptest::collection::vec(any::<MQ00Packet<20, 52>>(), 1..200)) {
             let mut buf = vec![];
             let mut cursor = Cursor::new(&mut buf);
             for packet in &packets {
@@ -690,6 +700,35 @@ mod tests {
                 decoded_packets.push(MQ00Packet::read(&mut cursor)?);
             }
             prop_assert_eq!(packets, decoded_packets);
+        }
+
+        #[test]
+        fn any_config_errors(
+            frames in proptest::collection::vec(any::<DDMFrame<20, 52>>(), 1..200),
+            quantisation in 0..16u8,
+            dc_adjust in any::<bool>(),
+            wavelet_stages in 0..16u8
+        ) {
+            let config = MQ00EncoderConfig::new(quantisation, dc_adjust, wavelet_stages, 1)?;
+            let mut encoder = MQ00Encoder::new(config);
+            let mut buf = vec![];
+            let mut cursor = Cursor::new(&mut buf);
+            for frame in frames.clone() {
+                encoder.encode(frame)?.write(&mut cursor)?;
+            }
+            let mut decoder: MQ00Decoder<20, 52> = MQ00Decoder::new();
+            let mut decoded_frames = vec![];
+            let mut cursor = Cursor::new(cursor.into_inner());
+            loop {
+                match MQ00Packet::read(&mut cursor) {
+                    Ok(packet) => decoded_frames.push(decoder.decode(packet)?),
+                    Err(binrw::Error::Io(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+                    Err(e) => return Err(e.into())
+                }
+            }
+            prop_assert_eq!(frames.len(), decoded_frames.len());
+
+
         }
     }
 }
