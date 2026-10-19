@@ -5,7 +5,7 @@
 #[cfg(test)]
 extern crate std;
 
-#[cfg(feature = "alloc")]
+#[cfg(not(feature = "std"))]
 extern crate alloc;
 
 pub mod coding;

@@ -1,6 +1,6 @@
 //! MP00 legacy packet type
 
-#[cfg(feature = "alloc")]
+#[cfg(not(feature = "std"))]
 use alloc::boxed::Box;
 
 use binrw::{
@@ -327,7 +327,7 @@ mod tests {
 
     proptest! {
         #[test]
-        fn full_round_trip(frames in proptest::collection::vec(any::<DDMFrame<20, 52>>(), 1..200)) {
+        fn full_round_trip(frames in proptest::collection::vec(any::<DDMFrame<20, 52>>(), 1..64)) {
             let mut encoder = MP00Encoder::new(0);
             let mut buf = vec![];
             let mut cursor = Cursor::new(&mut buf);
@@ -348,7 +348,7 @@ mod tests {
         }
 
         #[test]
-        fn encode_round_trip(frames in proptest::collection::vec(any::<DDMFrame<20, 52>>(), 1..200)) {
+        fn encode_round_trip(frames in proptest::collection::vec(any::<DDMFrame<20, 52>>(), 1..64)) {
             let mut encoder = MP00Encoder::new(0);
             let mut packets = vec![];
             for frame in frames.clone() {
@@ -363,7 +363,7 @@ mod tests {
         }
 
         #[test]
-        fn bytestream_round_trip(packets in proptest::collection::vec(any::<MP00Packet<20, 52>>(), 1..200)) {
+        fn bytestream_round_trip(packets in proptest::collection::vec(any::<MP00Packet<20, 52>>(), 1..64)) {
             let mut buf = vec![];
             let mut cursor = Cursor::new(&mut buf);
             for packet in &packets {

@@ -10,8 +10,6 @@ default = ["std"]
 serde = ["dep:serde", "serde/derive", "ndarray/serde", "dep:serde-big-array"]
 proptest = ["std", "dep:proptest", "dep:proptest-derive"]
 std = ["serde/std", "binrw/std", "bitstream-io/std", "crc32fast/std"]
-serde-big-array = ["dep:serde-big-array"]
-alloc = []
 
 [lints]
 workspace = true

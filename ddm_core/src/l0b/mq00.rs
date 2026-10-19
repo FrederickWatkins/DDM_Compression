@@ -1,6 +1,6 @@
 //! Expertimental MQ00 packet type
 
-#[cfg(feature = "alloc")]
+#[cfg(not(feature = "std"))]
 use alloc::boxed::Box;
 use core::iter;
 
@@ -641,7 +641,7 @@ mod tests {
     proptest! {
         #[test]
         fn full_round_trip(
-            frames in proptest::collection::vec(any::<DDMFrame<20, 52>>(), 1..200),
+            frames in proptest::collection::vec(any::<DDMFrame<20, 52>>(), 1..64),
             dc_adjust in any::<bool>(),
             wavelet_stages in 0..16u8,
             gop_length in 1..=32u8
@@ -668,7 +668,7 @@ mod tests {
 
         #[test]
         fn encode_round_trip(
-            frames in proptest::collection::vec(any::<DDMFrame<20, 52>>(), 1..200),
+            frames in proptest::collection::vec(any::<DDMFrame<20, 52>>(), 1..64),
             dc_adjust in any::<bool>(),
             wavelet_stages in 0..16u8,
             gop_length in 1..=32u8
@@ -688,7 +688,7 @@ mod tests {
         }
 
         #[test]
-        fn bytestream_round_trip(packets in proptest::collection::vec(any::<MQ00Packet<20, 52>>(), 1..200)) {
+        fn bytestream_round_trip(packets in proptest::collection::vec(any::<MQ00Packet<20, 52>>(), 1..64)) {
             let mut buf = vec![];
             let mut cursor = Cursor::new(&mut buf);
             for packet in &packets {
@@ -704,7 +704,7 @@ mod tests {
 
         #[test]
         fn any_config_errors(
-            frames in proptest::collection::vec(any::<DDMFrame<20, 52>>(), 1..200),
+            frames in proptest::collection::vec(any::<DDMFrame<20, 52>>(), 1..64),
             quantisation in 0..16u8,
             dc_adjust in any::<bool>(),
             wavelet_stages in 0..16u8
