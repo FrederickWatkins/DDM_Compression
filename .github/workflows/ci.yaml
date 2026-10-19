@@ -1,0 +1,156 @@
+name: Rust CI
+
+on:
+    push:
+    pull_request:
+    workflow_dispatch:
+
+permissions:
+    contents: read
+
+concurrency:
+    group: ci-${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: true
+
+env:
+    CARGO_TERM_COLOR: always
+    RUST_BACKTRACE: 1
+
+jobs:
+    fmt:
+        name: Formatting
+        runs-on: ubuntu-latest
+        timeout-minutes: 10
+
+        steps:
+            - uses: actions/checkout@v7
+
+            # Use nightly if the repository's rustfmt.toml requires nightly options.
+            - uses: dtolnay/rust-toolchain@nightly
+              with:
+                  components: rustfmt
+
+            - name: Check formatting
+              run: cargo fmt --all -- --check
+
+    feature-powerset:
+        name: Feature powerset / ${{ matrix.check }}
+        runs-on: ubuntu-latest
+        timeout-minutes: 60
+
+        strategy:
+            fail-fast: false
+            matrix:
+                check:
+                    - check
+                    - test
+                    - clippy
+                    - doc
+
+        steps:
+            - uses: actions/checkout@v7
+
+            - uses: dtolnay/rust-toolchain@stable
+              with:
+                  components: clippy
+
+            - uses: Swatinem/rust-cache@v2
+              with:
+                  shared-key: stable-powerset
+
+            - name: Install cargo-hack
+              uses: taiki-e/install-action@v2
+              with:
+                  tool: cargo-hack
+
+            - name: Check all feature combinations
+              if: matrix.check == 'check'
+              run: >
+                  cargo hack check
+                  --workspace
+                  --feature-powerset
+                  --locked
+
+            - name: Test all feature combinations
+              if: matrix.check == 'test'
+              run: |
+                  cargo hack test \
+                    --workspace \
+                    --feature-powerset \
+                    --locked \
+                    --all-targets
+
+                  cargo hack test \
+                    --workspace \
+                    --feature-powerset \
+                    --locked \
+                    --doc
+
+            - name: Clippy all targets and feature combinations
+              if: matrix.check == 'clippy'
+              run: >
+                  cargo hack clippy
+                  --workspace
+                  --feature-powerset
+                  --locked
+                  --all-targets
+                  --
+                  -D warnings
+
+            - name: Build documentation for all feature combinations
+              if: matrix.check == 'doc'
+              env:
+                  RUSTDOCFLAGS: -D warnings
+              run: >
+                  cargo hack doc
+                  --workspace
+                  --feature-powerset
+                  --locked
+                  --no-deps
+
+    dependency-hygiene:
+        name: Dependency hygiene
+        runs-on: ubuntu-latest
+        timeout-minutes: 15
+
+        steps:
+            - uses: actions/checkout@v7
+
+            - uses: dtolnay/rust-toolchain@stable
+
+            - uses: Swatinem/rust-cache@v2
+              with:
+                  shared-key: stable-dependencies
+
+            - name: Install cargo-machete
+              uses: taiki-e/install-action@v2
+              with:
+                  tool: cargo-machete
+
+            - name: Check for unused dependencies
+              run: cargo machete
+
+            - name: Verify lockfile is up to date
+              run: cargo metadata --locked --format-version 1 > /dev/null
+
+    msrv:
+        name: Minimum supported Rust version
+        runs-on: ubuntu-latest
+        timeout-minutes: 45
+
+        steps:
+            - uses: actions/checkout@v7
+
+            - uses: dtolnay/rust-toolchain@stable
+
+            - uses: Swatinem/rust-cache@v2
+              with:
+                  shared-key: msrv
+
+            - name: Install cargo-msrv
+              uses: taiki-e/install-action@v2
+              with:
+                  tool: cargo-msrv
+
+            - name: Verify declared MSRV
+              run: cargo msrv verify

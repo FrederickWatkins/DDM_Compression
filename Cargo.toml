@@ -1,6 +1,8 @@
 [workspace]
 resolver = "3"
 members = ["ddm_core"]
+package.rust-version = "1.87.0"
+package.license = "MIT"
 
 [profile.release]
 opt-level = 3
