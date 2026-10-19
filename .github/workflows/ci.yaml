@@ -31,7 +31,7 @@ jobs:
                   components: rustfmt
 
             - name: Check formatting
-              run: cargo fmt --all -- --check
+              run: cargo +nightly fmt --all -- --check
 
     feature-powerset:
         name: Feature powerset / ${{ matrix.check }}
@@ -134,12 +134,12 @@ jobs:
               run: cargo metadata --locked --format-version 1 > /dev/null
 
     msrv:
-        name: Minimum supported Rust version
+        name: Minimum supported Rust versions
         runs-on: ubuntu-latest
         timeout-minutes: 45
 
         steps:
-            - uses: actions/checkout@v7
+            - uses: actions/checkout@v6
 
             - uses: dtolnay/rust-toolchain@stable
 
@@ -147,10 +147,15 @@ jobs:
               with:
                   shared-key: msrv
 
-            - name: Install cargo-msrv
+            - name: Install cargo-hack
               uses: taiki-e/install-action@v2
               with:
-                  tool: cargo-msrv
+                  tool: cargo-hack
 
-            - name: Verify declared MSRV
-              run: cargo msrv verify
+            - name: Check workspace at each package's MSRV
+              run: >
+                  cargo hack check
+                  --workspace
+                  --rust-version
+                  --all-targets
+                  --locked
