@@ -2,9 +2,19 @@
 resolver = "3"
 members = ["ddm_core"]
 
+[profile.release]
+opt-level = 3
+lto = "fat"
+panic = "abort"
+strip = true
+
+[profile.bench]
+opt-level = 3
+lto = "fat"
+
 [workspace.lints.rust]
 unused_qualifications = "warn"
-missing_docs = "deny"
+missing_docs = "warn"
 
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }

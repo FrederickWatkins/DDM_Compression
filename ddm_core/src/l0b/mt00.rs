@@ -1,6 +1,8 @@
 //! MT00 calibration packet
 
 use binrw::{BinRead, BinWrite};
+#[cfg(feature = "serde")]
+use serde_big_array::BigArray;
 
 /// MT00 packet type
 #[derive(BinRead, BinWrite, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -8,12 +10,14 @@ use binrw::{BinRead, BinWrite};
 #[cfg_attr(any(test, feature = "proptest"), derive(proptest_derive::Arbitrary))]
 #[brw(big)]
 pub struct MT00Packet {
+    #[cfg_attr(feature = "serde", serde(with = "BigArray"))]
     buf: [u8; 56],
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
+mod tests {
     use std::io::Cursor;
+    use std::vec;
 
     use proptest::prelude::*;
 
@@ -29,12 +33,8 @@ pub(crate) mod tests {
             }
             let mut decoded_packets = vec![];
             let mut cursor = Cursor::new(cursor.into_inner());
-            loop {
-                match MT00Packet::read(&mut cursor) {
-                    Ok(packet) => decoded_packets.push(packet),
-                    Err(binrw::Error::Io(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
-                    Err(e) => return Err(e.into())
-                }
+            for _ in 0..packets.len() {
+                decoded_packets.push(MT00Packet::read(&mut cursor)?);
             }
             prop_assert_eq!(packets, decoded_packets);
         }

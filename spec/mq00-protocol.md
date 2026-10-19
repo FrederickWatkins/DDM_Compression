@@ -37,9 +37,36 @@ encoded in big-endian byte order.
 
 # Packet format
 
-## MQ00 packet
+## Header layout
 
+| Offset | Type   | Description |
+| ------ | ------ | ----------- |
+| 0      | UINT32 | Packet preamble = 0xCA750200 |
+| 4      | UINT32 | Packet type = 0x4D513030 for MQ00 |
+| 8      | UINT8  | Header version = 0 for the version described in this document |
+| 9      | UINT8  | DDM hardware channel number |
+| 10     | UINT8  | Status flags |
+| 11     | UINT8  | Wavelet coefficient quantisation/wavelet transform stages |
+| 12     | UINT8  | Reserved |
+| 13     | UINT8  | Packet type |
+| 14     | UINT16 | DC offset |
+| 16     | UINT32 | Time stamp of integration start: GPS seconds at last PPS as rounded integer |
+| 20     | INT32  | Time stamp of integration start: sample clocks since last PPS |
 
+## Detailed metadata descriptions
+
+- Wavelet coefficient quantisation/wavelet transform stages:
+- Packet type
+
+# Pixel data encoding
+
+## Decoding process
+
+## Encoding process (informative)
+
+For the purposes of protocol standardization, a compliant encoder is any encoder that produces a
+bitstream that a compliant decoder (complying with the MUST directives above) can reproduce the
+desired data from. Below is an example of a compliant encoder.
 
 --- back
 

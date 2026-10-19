@@ -1,17 +1,19 @@
 //! MP00 legacy packet type
 
-use std::io::{Seek, Write};
+#[cfg(feature = "alloc")]
+use alloc::boxed::Box;
 
 use binrw::{
-    BinRead, BinWrite,
+    BinRead, BinResult, BinWrite,
     Endian::Big,
+    io::{Read, Seek, Write},
     meta::{EndianKind, ReadEndian, WriteEndian},
 };
-use ndarray::Array2;
+use ndarray::{Array2, ArrayView2, Dim, ShapeBuilder};
 
 use crate::{
-    error::Result,
-    l0b::{DDMDecoder, DDMEncoder, DDMFrame},
+    coding::crc::{CrcReader, CrcWriter},
+    l0b::{DDMDecoder, DDMEncoder, DDMFrame, DDMFrameMetadata, EncodingError},
 };
 
 /// Encoder capable of converting raw DDM frame data into encoded MP00 packets
@@ -24,7 +26,7 @@ pub struct MP00Encoder<const WIDTH: usize, const HEIGHT: usize> {
 impl<const WIDTH: usize, const HEIGHT: usize> MP00Encoder<WIDTH, HEIGHT> {
     /// Create a new MP00 encoder
     pub fn new(pixel_quantisation: u8) -> Self {
-        todo!()
+        Self { pixel_quantisation }
     }
 }
 
@@ -33,20 +35,30 @@ impl<const WIDTH: usize, const HEIGHT: usize> DDMEncoder<WIDTH, HEIGHT>
 {
     type Packet = MP00Packet<WIDTH, HEIGHT>;
 
-    fn encode(&mut self, frame: &DDMFrame<WIDTH, HEIGHT>) -> Result<Self::Packet> {
-        todo!()
+    fn encode(&mut self, frame: &DDMFrame<WIDTH, HEIGHT>) -> Result<Self::Packet, EncodingError> {
+        let header = MP00Header {
+            channel: frame.metadata.channel,
+            status_flag: frame.metadata.status_flag,
+            pixel_quantisation: self.pixel_quantisation,
+            gps_seconds: frame.metadata.gps_seconds,
+            sample_clocks: frame.metadata.sample_clocks,
+        };
+        Ok(Self::Packet {
+            header,
+            pixel_data: frame.pixel_data.mapv(|x| x >> self.pixel_quantisation),
+        })
     }
 }
 
 /// Encoder capable of converting encoded MP00 packets into raw DDM frame data
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct MP00Decoder<const WIDTH: usize, const HEIGHT: usize> {}
+pub struct MP00Decoder<const WIDTH: usize, const HEIGHT: usize>;
 
 impl<const WIDTH: usize, const HEIGHT: usize> MP00Decoder<WIDTH, HEIGHT> {
     /// Create a new MP00 decoder
     pub fn new() -> Self {
-        todo!()
+        Self
     }
 }
 
@@ -55,23 +67,34 @@ impl<const WIDTH: usize, const HEIGHT: usize> DDMDecoder<WIDTH, HEIGHT>
 {
     type Packet = MP00Packet<WIDTH, HEIGHT>;
 
-    fn decode(&mut self, packet: Self::Packet) -> Result<DDMFrame<WIDTH, HEIGHT>> {
-        todo!()
+    fn decode(&mut self, packet: Self::Packet) -> Result<DDMFrame<WIDTH, HEIGHT>, EncodingError> {
+        let metadata = DDMFrameMetadata {
+            channel: packet.header.channel,
+            status_flag: packet.header.status_flag,
+            gps_seconds: packet.header.gps_seconds,
+            sample_clocks: packet.header.sample_clocks,
+        };
+        Ok(DDMFrame {
+            metadata,
+            pixel_data: packet
+                .pixel_data
+                .mapv(|x| x << packet.header.pixel_quantisation),
+        })
     }
 }
 
 /// Header for MP00 packets
 #[derive(BinRead, BinWrite, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(any(test, feature = "serde"), derive(proptest_derive::Arbitrary))]
+#[cfg_attr(any(test, feature = "proptest"), derive(proptest_derive::Arbitrary))]
 #[brw(big)]
 #[brw(magic = 2u8)] // Header version 2
 pub struct MP00Header {
-    channel_num: u8,
+    channel: u8,
     status_flag: u8,
     pixel_quantisation: u8,
-    timestamp_seconds: u32,
-    timestamp_clocks: i32,
+    gps_seconds: u32,
+    sample_clocks: i32,
 }
 
 /// MP00 packet type
@@ -85,12 +108,40 @@ pub struct MP00Packet<const WIDTH: usize, const HEIGHT: usize> {
 impl<const WIDTH: usize, const HEIGHT: usize> BinRead for MP00Packet<WIDTH, HEIGHT> {
     type Args<'a> = ();
 
-    fn read_options<R: std::io::prelude::Read + Seek>(
+    fn read_options<R: Read + Seek>(
         reader: &mut R,
         endian: binrw::Endian,
         args: Self::Args<'_>,
-    ) -> binrw::prelude::BinResult<Self> {
-        todo!()
+    ) -> BinResult<Self> {
+        let mut crc_reader = CrcReader::new(reader);
+        let header = MP00Header::read_options(&mut crc_reader, endian, args)?;
+
+        let start_pos = crc_reader.stream_position()?;
+        let pixel_data = decode_pixel_data(&mut crc_reader, [HEIGHT, WIDTH])?;
+        let end_pos = crc_reader.stream_position()?;
+
+        // Align the stream back to a multiple of 4
+        let bytes_decoded = end_pos - start_pos;
+        if !bytes_decoded.is_multiple_of(4) {
+            let target_distance = 4 - (bytes_decoded % 4);
+            #[expect(clippy::cast_possible_wrap, reason = "Target distance max value is 3")]
+            crc_reader.seek_relative(target_distance as i64)?;
+        }
+
+        let calculated_crc = crc_reader.finalize();
+
+        let crc = u32::read_options(reader, endian, args)?;
+        if crc != calculated_crc {
+            return Err(binrw::Error::Custom {
+                pos: end_pos,
+                err: Box::new(EncodingError::CrcMismatch {
+                    encoded_crc: crc,
+                    calculated_crc,
+                }),
+            });
+        }
+
+        Ok(Self { header, pixel_data })
     }
 }
 
@@ -102,8 +153,29 @@ impl<const WIDTH: usize, const HEIGHT: usize> BinWrite for MP00Packet<WIDTH, HEI
         writer: &mut W,
         endian: binrw::Endian,
         args: Self::Args<'_>,
-    ) -> binrw::prelude::BinResult<()> {
-        todo!()
+    ) -> BinResult<()> {
+        let mut crc_writer = CrcWriter::new(writer);
+        self.header.write_options(&mut crc_writer, endian, args)?;
+
+        let start_pos = crc_writer.stream_position()?;
+        encode_pixel_data(&mut crc_writer, &self.pixel_data.view())?;
+        let end_pos = crc_writer.stream_position()?;
+
+        let crc = crc_writer.finalize();
+
+        // Align the stream back to a multiple of 4
+        let bytes_encoded = end_pos - start_pos;
+        if !bytes_encoded.is_multiple_of(4) {
+            let target_distance = 4 - (bytes_encoded % 4);
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "Target distance max value is 3"
+            )]
+            writer.write_all(&[0u8; 3][..target_distance as usize])?;
+        }
+
+        crc.write_options(writer, endian, args)?;
+        Ok(())
     }
 }
 
@@ -141,9 +213,105 @@ impl<const WIDTH: usize, const HEIGHT: usize> proptest::arbitrary::Arbitrary
     }
 }
 
+/// Decode pixel data using sign extended VRQ format
+///
+/// Returns pixel data and number of bytes read
+fn decode_pixel_data<R: Read, Sh>(
+    reader: &mut R,
+    shape: Sh,
+) -> Result<Array2<u16>, binrw::io::Error>
+where
+    Sh: ShapeBuilder<Dim = Dim<[usize; 2]>>,
+{
+    let mut output = Array2::from_elem(shape, 0);
+    let mut prev_pixel = 0u16;
+    for pixel in &mut output {
+        let delta_value = decode_vrq(reader)?;
+        *pixel = prev_pixel.overflowing_add(delta_value.cast_unsigned()).0;
+        prev_pixel = *pixel;
+    }
+    Ok(output)
+}
+
+/// Encode pixel data using sign extended VRQ format
+///
+/// Returns number of bytes written
+fn encode_pixel_data<W: Write>(
+    writer: &mut W,
+    pixel_data: &ArrayView2<u16>,
+) -> Result<(), binrw::io::Error> {
+    let mut prev_pixel = 0u16;
+    for pixel in pixel_data {
+        let delta_value: i16 = pixel.overflowing_sub(prev_pixel).0.cast_signed();
+        encode_vrq(writer, delta_value)?;
+        prev_pixel = *pixel;
+    }
+
+    Ok(())
+}
+
+/// Decode an i16 from 3 byte VRQ format
+///
+/// Returns result and number of bytes read
+fn decode_vrq<R: Read>(reader: &mut R) -> Result<i16, binrw::io::Error> {
+    let mut bytes = [0u8; 3];
+    reader.read_exact(&mut bytes[0..1])?;
+    if bytes[0] >> 7 == 1 {
+        reader.read_exact(&mut bytes[1..2])?;
+        if bytes[1] >> 7 == 1 {
+            reader.read_exact(&mut bytes[2..3])?;
+            // Pass width 16 for 3-byte i16 values
+            Ok(sign_extend(&bytes[..3], 16))
+        } else {
+            Ok(sign_extend(&bytes[..2], 14))
+        }
+    } else {
+        Ok(sign_extend(&bytes[..1], 7))
+    }
+}
+
+/// Encode an i16 into 3 byte VRQ format
+///
+/// Returns number of bytes written
+fn encode_vrq<W: Write>(writer: &mut W, val: i16) -> Result<(), binrw::io::Error> {
+    #![allow(clippy::unwrap_used, reason = "Guaranteed to fit by &")]
+    if (-64..=63).contains(&val) {
+        let b0 = u8::try_from(val.cast_unsigned() & 0x7F).unwrap();
+        writer.write_all(&[b0])?;
+        Ok(())
+    } else if (-8192..=8191).contains(&val) {
+        let u = val.cast_unsigned();
+        let b0 = u8::try_from(u & 0x7F).unwrap() | 0x80;
+        let b1 = u8::try_from((u >> 7) & 0x7F).unwrap();
+        writer.write_all(&[b0, b1])?;
+        Ok(())
+    } else {
+        let u = u32::from(val.cast_unsigned());
+        let b0 = u8::try_from(u & 0x7F).unwrap() | 0x80;
+        let b1 = u8::try_from((u >> 7) & 0x7F).unwrap() | 0x80;
+        let b2 = u8::try_from(u >> 14).unwrap() & 0x7F;
+        writer.write_all(&[b0, b1, b2])?;
+        Ok(())
+    }
+}
+
+/// Sign extend a signed integer of arbitrary width, using only the lower seven bits in each byte
+fn sign_extend(bytes: &[u8], width: usize) -> i16 {
+    let mut output = 0i16;
+    let num_bytes = bytes.len();
+    for (i, byte) in bytes.iter().enumerate().take(num_bytes) {
+        output |= i16::from(byte & 0x7F) << (7 * i);
+    }
+    // Only sign-extend if width is less than 16
+    if width < 16 && (output >> (width - 1)) & 1 == 1 {
+        output |= -1 << width;
+    }
+    output
+}
+
 #[cfg(test)]
-pub(crate) mod tests {
-    use std::io::Cursor;
+mod tests {
+    use std::{io::Cursor, vec};
 
     use proptest::prelude::*;
 
@@ -195,14 +363,70 @@ pub(crate) mod tests {
             }
             let mut decoded_packets = vec![];
             let mut cursor = Cursor::new(cursor.into_inner());
-            loop {
-                match MP00Packet::read(&mut cursor) {
-                    Ok(packet) => decoded_packets.push(packet),
-                    Err(binrw::Error::Io(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
-                    Err(e) => return Err(e.into())
-                }
+            for _ in 0..packets.len() {
+                decoded_packets.push(MP00Packet::read(&mut cursor)?);
             }
             prop_assert_eq!(packets, decoded_packets);
         }
     }
 }
+
+// #[cfg(all(test, not(feature = "std")))]
+// mod tests {
+//     use super::*;
+
+//     #[test]
+//     fn full_round_trip() {
+//         let mut encoder = MP00Encoder::new(0);
+//         let mut buf = vec![];
+//         let mut cursor = Cursor::new(&mut buf);
+//         for frame in &frames {
+//             encoder.encode(frame)?.write(&mut cursor)?;
+//         }
+//         let mut decoder = MP00Decoder::new();
+//         let mut decoded_frames = vec![];
+//         let mut cursor = Cursor::new(cursor.into_inner());
+//         loop {
+//             match MP00Packet::read(&mut cursor) {
+//                 Ok(packet) => decoded_frames.push(decoder.decode(packet)?),
+//                 Err(binrw::Error::Io(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof =>
+// break,                 Err(e) => return Err(e.into()),
+//             }
+//         }
+//         prop_assert_eq!(frames, decoded_frames);
+//     }
+
+//     #[test]
+//     fn encode_round_trip() {
+//         let mut encoder = MP00Encoder::new(0);
+//         let mut packets = vec![];
+//         for frame in &frames {
+//             packets.push(encoder.encode(frame)?);
+//         }
+//         let mut decoder = MP00Decoder::new();
+//         let mut decoded_frames = vec![];
+//         for packet in packets {
+//             decoded_frames.push(decoder.decode(packet)?);
+//         }
+//         prop_assert_eq!(frames, decoded_frames);
+//     }
+
+//     #[test]
+//     fn bytestream_round_trip() {
+//         let mut buf = vec![];
+//         let mut cursor = Cursor::new(&mut buf);
+//         for packet in &packets {
+//             packet.write(&mut cursor)?;
+//         }
+//         let mut decoded_packets = vec![];
+//         let mut cursor = Cursor::new(cursor.into_inner());
+//         loop {
+//             match MP00Packet::read(&mut cursor) {
+//                 Ok(packet) => decoded_packets.push(packet),
+//                 Err(binrw::Error::Io(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof =>
+// break,                 Err(e) => return Err(e.into()),
+//             }
+//         }
+//         prop_assert_eq!(packets, decoded_packets);
+//     }
+// }

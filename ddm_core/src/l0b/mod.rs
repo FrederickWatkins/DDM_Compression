@@ -2,8 +2,6 @@
 use binrw::{BinRead, BinWrite};
 use ndarray::{Array2, ArrayView2};
 
-use crate::error::Result;
-
 mod mp00;
 pub use mp00::{MP00Decoder, MP00Encoder, MP00Header, MP00Packet};
 
@@ -13,6 +11,42 @@ pub use mq00::{MQ00Decoder, MQ00Encoder, MQ00EncoderConfig, MQ00Header, MQ00Pack
 mod mt00;
 pub use mt00::MT00Packet;
 
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+/// Error during encoding or decoding
+pub enum EncodingError {
+    /// CRCs don't match
+    #[error("encoded CRC {encoded_crc} doesn't match calculated crc {calculated_crc}")]
+    CrcMismatch{
+        /// CRC encoded in binary data
+        encoded_crc: u32,
+        /// CRC calculated from data
+        calculated_crc: u32,
+    },
+    /// Encoder/decoder received invalid data
+    #[error("invalid input value: {name} must fit into type {var_type}, got {value}")]
+    InvalidInput{
+        /// Name of variable that received invalid data
+        name: &'static str,
+        /// Intended type of variable
+        var_type: &'static str,
+        /// Actual value of variable
+        value: i64
+    },
+    /// Configuration variable outside range
+    #[error("config {name} must be between {min} and {max}, got {actual}")]
+    ConfigValueOutOfRange {
+        /// Variable name
+        name: &'static str,
+        /// Minimum allowed value
+        min: u64,
+        /// Maximum allowed value
+        max: u64,
+        /// Actual value
+        actual: u64,
+    },
+}
+
 /// An encoder capable of turning [`DDMFrame`]s into a packets
 pub trait DDMEncoder<const WIDTH: usize, const HEIGHT: usize> {
     /// Type of packet encoder outputs
@@ -21,9 +55,8 @@ pub trait DDMEncoder<const WIDTH: usize, const HEIGHT: usize> {
     /// Encode `DDMFrame` into packet
     ///
     /// # Errors
-    /// - [`crate::error::Error::Io`] if an IO error occurs on the underlying stream during
-    ///   decoding
-    fn encode(&mut self, frame: &DDMFrame<WIDTH, HEIGHT>) -> Result<Self::Packet>;
+    /// - [`crate::error::Error::Io`] if an IO error occurs on the underlying stream during decoding
+    fn encode(&mut self, frame: &DDMFrame<WIDTH, HEIGHT>) -> Result<Self::Packet, EncodingError>;
 }
 
 /// A decoder capable of turning a bitstream into a [`DDMFrame`]
@@ -34,15 +67,13 @@ pub trait DDMDecoder<const WIDTH: usize, const HEIGHT: usize> {
     /// Decode `DDMFrame` from packet
     ///
     /// # Errors
-    /// - [`crate::error::Error::Io`] if an IO error occurs on the underlying stream during
-    ///   decoding
-    fn decode(&mut self, packet: Self::Packet) -> Result<DDMFrame<WIDTH, HEIGHT>>;
+    /// - [`crate::error::Error::Io`] if an IO error occurs on the underlying stream during decoding
+    fn decode(&mut self, packet: Self::Packet) -> Result<DDMFrame<WIDTH, HEIGHT>, EncodingError>;
 }
 
 /// Metadata for a single DDM frame
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(any(test, feature = "proptest"), derive(proptest_derive::Arbitrary))]
 pub struct DDMFrameMetadata {
     channel: u8,
     status_flag: u8,
@@ -107,6 +138,26 @@ impl DDMFrameMetadata {
     pub fn with_sample_clocks(mut self, sample_clocks: i32) -> Self {
         self.sample_clocks = sample_clocks;
         self
+    }
+}
+
+#[cfg(any(test, feature = "proptest"))]
+impl proptest::arbitrary::Arbitrary for DDMFrameMetadata {
+    type Parameters = ();
+    type Strategy = proptest::strategy::BoxedStrategy<Self>;
+
+    fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
+        use proptest::prelude::*;
+
+        #[expect(clippy::expect_used, reason = "Calculation guarantees same size")]
+        (0..15u8, any::<u8>(), any::<u32>(), any::<i32>())
+            .prop_map(|(channel, status_flag, gps_seconds, sample_clocks)| Self {
+                channel,
+                status_flag,
+                gps_seconds,
+                sample_clocks,
+            })
+            .boxed()
     }
 }
 
@@ -186,7 +237,7 @@ pub enum L0bPacket<const WIDTH: usize, const HEIGHT: usize> {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Cursor;
+    use std::{io::Cursor, vec};
 
     use proptest::prelude::*;
 
