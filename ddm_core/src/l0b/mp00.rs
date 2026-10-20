@@ -16,17 +16,42 @@ use crate::{
     l0b::{DDMDecoder, DDMEncoder, DDMFrame, DDMFrameMetadata, EncodingError},
 };
 
+/// Config for [`MP00Encoder`]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct MP00EncoderConfig {
+    quantisation: u8,
+}
+
+impl MP00EncoderConfig {
+    /// Create new encoder config
+    pub fn new(quantisation: u8) -> Self {
+        Self::default().with_quantisation(quantisation)
+    }
+
+    /// Quantisation in block floating point exponent
+    pub fn quantisation(&self) -> u8 {
+        self.quantisation
+    }
+
+    /// Quantisation in block floating point exponent
+    pub fn with_quantisation(mut self, bits: u8) -> Self {
+        self.quantisation = bits;
+        self
+    }
+}
+
 /// Encoder capable of converting raw DDM frame data into encoded MP00 packets
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MP00Encoder<const WIDTH: usize, const HEIGHT: usize> {
-    pixel_quantisation: u8,
+    config: MP00EncoderConfig,
 }
 
 impl<const WIDTH: usize, const HEIGHT: usize> MP00Encoder<WIDTH, HEIGHT> {
     /// Create a new MP00 encoder
-    pub fn new(pixel_quantisation: u8) -> Self {
-        Self { pixel_quantisation }
+    pub fn new(config: MP00EncoderConfig) -> Self {
+        Self { config }
     }
 }
 
@@ -39,13 +64,13 @@ impl<const WIDTH: usize, const HEIGHT: usize> DDMEncoder<WIDTH, HEIGHT>
         let header = MP00Header {
             channel: frame.metadata.channel,
             status_flag: frame.metadata.status_flag,
-            pixel_quantisation: self.pixel_quantisation,
+            quantisation: self.config.quantisation,
             gps_seconds: frame.metadata.gps_seconds,
             sample_clocks: frame.metadata.sample_clocks,
         };
         Ok(Self::Packet {
             header,
-            pixel_data: frame.pixel_data.mapv(|x| x >> self.pixel_quantisation),
+            pixel_data: frame.pixel_data.mapv(|x| x >> self.config.quantisation),
         })
     }
 }
@@ -76,9 +101,7 @@ impl<const WIDTH: usize, const HEIGHT: usize> DDMDecoder<WIDTH, HEIGHT>
         };
         Ok(DDMFrame {
             metadata,
-            pixel_data: packet
-                .pixel_data
-                .mapv(|x| x << packet.header.pixel_quantisation),
+            pixel_data: packet.pixel_data.mapv(|x| x << packet.header.quantisation),
         })
     }
 }
@@ -92,7 +115,7 @@ impl<const WIDTH: usize, const HEIGHT: usize> DDMDecoder<WIDTH, HEIGHT>
 pub struct MP00Header {
     channel: u8,
     status_flag: u8,
-    pixel_quantisation: u8,
+    quantisation: u8,
     gps_seconds: u32,
     sample_clocks: i32,
 }
@@ -328,7 +351,7 @@ mod tests {
     proptest! {
         #[test]
         fn full_round_trip(frames in proptest::collection::vec(any::<DDMFrame<20, 52>>(), 1..64)) {
-            let mut encoder = MP00Encoder::new(0);
+            let mut encoder = MP00Encoder::new(MP00EncoderConfig::new(0));
             let mut buf = vec![];
             let mut cursor = Cursor::new(&mut buf);
             for frame in frames.clone() {
@@ -349,7 +372,7 @@ mod tests {
 
         #[test]
         fn encode_round_trip(frames in proptest::collection::vec(any::<DDMFrame<20, 52>>(), 1..64)) {
-            let mut encoder = MP00Encoder::new(0);
+            let mut encoder = MP00Encoder::new(MP00EncoderConfig::new(0));
             let mut packets = vec![];
             for frame in frames.clone() {
                 packets.push(encoder.encode(frame)?);

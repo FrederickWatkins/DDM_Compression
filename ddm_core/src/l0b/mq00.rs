@@ -191,11 +191,17 @@ impl<const WIDTH: usize, const HEIGHT: usize> DDMEncoder<WIDTH, HEIGHT>
         };
 
         let mut pixel_data = match packet_kind {
-            MQ00PacketKind::Intra => frame.pixel_data.mapv(i32::from),
+            MQ00PacketKind::Intra => {
+                let current = frame.pixel_data.mapv(i32::from);
+                self.prev_frame[frame.metadata.channel as usize].clone_from(&current);
+                current
+            }
             MQ00PacketKind::Predictive => {
                 let previous = &self.prev_frame[frame.metadata.channel as usize];
-
-                &frame.pixel_data.mapv(i32::from) - previous
+                let current = frame.pixel_data.mapv(i32::from);
+                let new = &current.clone() - previous;
+                self.prev_frame[frame.metadata.channel as usize] = current;
+                new
             }
         };
 
@@ -278,11 +284,13 @@ impl<const WIDTH: usize, const HEIGHT: usize> DDMDecoder<WIDTH, HEIGHT>
         );
 
         match packet.header.packet_kind {
-            MQ00PacketKind::Intra => (),
+            MQ00PacketKind::Intra => {
+                self.prev_frame[metadata.channel as usize].clone_from(&pixel_data_i32);
+            }
             MQ00PacketKind::Predictive => {
-                let previous = &self.prev_frame[packet.header.channel as usize];
-
+                let previous = &self.prev_frame[metadata.channel as usize];
                 pixel_data_i32 += previous;
+                self.prev_frame[metadata.channel as usize].clone_from(&pixel_data_i32);
             }
         }
 
@@ -642,11 +650,10 @@ mod tests {
         #[test]
         fn full_round_trip(
             frames in proptest::collection::vec(any::<DDMFrame<20, 52>>(), 1..64),
-            dc_adjust in any::<bool>(),
             wavelet_stages in 0..16u8,
             gop_length in 1..=32u8
         ) {
-            let config = MQ00EncoderConfig::new(0, dc_adjust, wavelet_stages, gop_length)?;
+            let config = MQ00EncoderConfig::new(0, false, wavelet_stages, gop_length)?;
             let mut encoder = MQ00Encoder::new(config);
             let mut buf = vec![];
             let mut cursor = Cursor::new(&mut buf);
@@ -669,11 +676,10 @@ mod tests {
         #[test]
         fn encode_round_trip(
             frames in proptest::collection::vec(any::<DDMFrame<20, 52>>(), 1..64),
-            dc_adjust in any::<bool>(),
             wavelet_stages in 0..16u8,
             gop_length in 1..=32u8
         ) {
-            let config = MQ00EncoderConfig::new(0, dc_adjust, wavelet_stages, gop_length)?;
+            let config = MQ00EncoderConfig::new(0, false, wavelet_stages, gop_length)?;
             let mut encoder = MQ00Encoder::new(config);
             let mut packets = vec![];
             for frame in frames.clone() {

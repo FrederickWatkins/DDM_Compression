@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["ddm_core"]
+members = ["ddm_app", "ddm_cli","ddm_core"]
 package.rust-version = "1.88.0"
 package.license = "MIT"
 
@@ -37,4 +37,5 @@ allow_attributes = "warn"
 use_self = "warn"
 new_without_default = "allow"
 return_self_not_must_use = "allow"
+similar_names = "allow"
 # missing_docs_in_private_items = "warn"

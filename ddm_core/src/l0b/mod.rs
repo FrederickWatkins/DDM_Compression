@@ -3,7 +3,7 @@ use binrw::{BinRead, BinWrite};
 use ndarray::{Array2, ArrayView2};
 
 mod mp00;
-pub use mp00::{MP00Decoder, MP00Encoder, MP00Header, MP00Packet};
+pub use mp00::{MP00Decoder, MP00Encoder, MP00EncoderConfig, MP00Header, MP00Packet};
 
 mod mq00;
 pub use mq00::{MQ00Decoder, MQ00Encoder, MQ00EncoderConfig, MQ00Header, MQ00Packet};

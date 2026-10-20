@@ -1,0 +1,16 @@
+[package]
+name = "ddm_cli"
+version = "0.1.0"
+edition = "2024"
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow = "1"
+tracing = { version = "0.1" }
+clap = "4"
+ddm_app = { path = "../ddm_app", features = ["clap"] }
+tracing-subscriber = { version = "0.3.23", features = ["fmt"] }
+
+[lints]
+workspace = true

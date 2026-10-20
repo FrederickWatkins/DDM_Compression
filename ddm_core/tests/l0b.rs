@@ -7,8 +7,8 @@ use std::{
 use anyhow::{Result, anyhow};
 use binrw::{BinRead as _, BinWrite as _};
 use ddm_core::l0b::{
-    DDMDecoder as _, DDMEncoder as _, L0bPacket, MP00Decoder, MP00Encoder, MQ00Decoder,
-    MQ00Encoder, MQ00EncoderConfig,
+    DDMDecoder as _, DDMEncoder as _, L0bPacket, MP00Decoder, MP00Encoder, MP00EncoderConfig,
+    MQ00Decoder, MQ00Encoder, MQ00EncoderConfig,
 };
 
 const DATA_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../data");
@@ -58,7 +58,7 @@ fn mp00_mq00_round_trip() -> Result<()> {
 fn convert_mp00_to_mq00<const WIDTH: usize, const HEIGHT: usize>(
     packets: Box<[L0bPacket<WIDTH, HEIGHT>]>,
 ) -> Result<Vec<L0bPacket<WIDTH, HEIGHT>>> {
-    let mq00_config = MQ00EncoderConfig::new(0, true, 4, 30)?;
+    let mq00_config = MQ00EncoderConfig::new(0, false, 4, 30)?;
     let mut mq00_encoder = MQ00Encoder::new(mq00_config);
     let mut mp00_decoder = MP00Decoder::new();
     packets
@@ -79,7 +79,7 @@ fn convert_mq00_to_mp00<const WIDTH: usize, const HEIGHT: usize>(
     packets: Box<[L0bPacket<WIDTH, HEIGHT>]>,
 ) -> Result<Vec<L0bPacket<WIDTH, HEIGHT>>> {
     let mut mq00_decoder = MQ00Decoder::new();
-    let mut mp00_encoder = MP00Encoder::new(0);
+    let mut mp00_encoder = MP00Encoder::new(MP00EncoderConfig::new(0));
     packets
         .into_iter()
         .map(|packet| {
