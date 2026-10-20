@@ -11,6 +11,7 @@ tracing = { version = "0.1" }
 clap = "4"
 ddm_app = { path = "../ddm_app", features = ["clap"] }
 tracing-subscriber = { version = "0.3.23", features = ["fmt"] }
+prodash = { version = "31", features = ["render-line", "render-line-crossterm", "render-line-autoconfigure"] }
 
 [lints]
 workspace = true

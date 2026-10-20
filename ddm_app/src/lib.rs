@@ -8,9 +8,10 @@ use std::{
 #[cfg(feature = "clap")]
 use clap::{Args, ValueEnum};
 use ddm_core::{error::Error, l0b::L0bPacket};
-use humansize::{DECIMAL, format_size};
+use human_format::Formatter;
 use itertools::process_results;
 use ranges::{Domain, Ranges};
+use anyhow::anyhow;
 
 pub mod encoding;
 pub mod file;
@@ -62,7 +63,7 @@ pub enum L0bFormatConfig {
 ///
 /// # Errors
 /// Errors if `input` doesn't contain a valid list and range formatted string
-pub fn parse_ranges<T>(input: &str) -> Result<Ranges<T>, String>
+pub fn parse_ranges<T>(input: &str) -> Result<Ranges<T>, anyhow::Error>
 where
     T: Domain + FromStr + Copy,
     <T as FromStr>::Err: Display,
@@ -77,7 +78,7 @@ where
         let part = part.trim();
 
         if part.is_empty() {
-            return Err("empty entry in range list".to_owned());
+            return Err(anyhow!("empty entry in range list"));
         }
 
         if let Some((start, end)) = part.split_once('-') {
@@ -85,26 +86,26 @@ where
             let end = end.trim();
 
             if start.is_empty() || end.is_empty() {
-                return Err(format!("invalid range `{part}`; expected START-END"));
+                return Err(anyhow!("invalid range `{part}`; expected START-END"));
             }
 
             let start = start
                 .parse::<T>()
-                .map_err(|e| format!("invalid range start in `{part}`: {e}"))?;
+                .map_err(|e| anyhow!("invalid range start in `{part}`: {e}"))?;
 
             let end = end
                 .parse::<T>()
-                .map_err(|e| format!("invalid range end in `{part}`: {e}"))?;
+                .map_err(|e| anyhow!("invalid range end in `{part}`: {e}"))?;
 
             if start > end {
-                return Err(format!("range start exceeds end in `{part}`"));
+                return Err(anyhow!("range start exceeds end in `{part}`"));
             }
 
             ranges.insert(start..=end);
         } else {
             let value = part
                 .parse::<T>()
-                .map_err(|e| format!("invalid value `{part}`: {e}"))?;
+                .map_err(|e| anyhow!("invalid value `{part}`: {e}"))?;
 
             ranges.insert(value..=value);
         }
@@ -177,6 +178,8 @@ impl L0bFileInfo {
 impl Display for L0bFileInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         use comfy_table::Table;
+        let mut bytes_format = Formatter::new();
+        bytes_format.with_decimals(2).with_units("bytes");
 
         let mut table = Table::new();
         table.set_header(vec!["Property", "Value"]);
@@ -193,7 +196,8 @@ impl Display for L0bFileInfo {
         ]);
         table.add_row(vec![
             "File size".to_owned(),
-            format_size(self.file_metadata.len(), DECIMAL),
+            #[expect(clippy::cast_precision_loss, reason = "File size precision loss is fine")]
+            bytes_format.format(self.file_metadata.len() as f64),
         ]);
         table.add_row(vec!["Packets".to_owned(), self.num_packets.to_string()]);
         table.add_row(vec!["DDM frames".to_owned(), self.num_frames.to_string()]);
@@ -237,6 +241,7 @@ impl Display for L0bFileInfo {
 #[tracing::instrument(skip_all)]
 pub fn inspect<const WIDTH: usize, const HEIGHT: usize>(
     input: PathBuf,
+    progress: &mut impl prodash::NestedProgress,
 ) -> Result<L0bFileInfo, Error> {
     let mut num_packets = 0;
     let mut num_frames = 0;
@@ -245,7 +250,9 @@ pub fn inspect<const WIDTH: usize, const HEIGHT: usize>(
     let mut gps_seconds = (u32::MAX, 0);
     let file_metadata = fs::metadata(&input)?;
     let file_name = input.file_name().unwrap_or(input.as_os_str()).into();
-    let packets = load::<L0bPacket<WIDTH, HEIGHT>>(input)?;
+    let mut reading = progress.add_child("Read packets");
+    let mut decoding = progress.add_child("Decode frames");
+    let packets = load::<L0bPacket<WIDTH, HEIGHT>>(input, &mut reading)?;
     process_results(packets, |packets| {
         let packets = packets.inspect(|packet| {
             num_packets += 1;
@@ -259,7 +266,7 @@ pub fn inspect<const WIDTH: usize, const HEIGHT: usize>(
                 L0bPacket::MT00(..) => (),
             }
         });
-        let frames = decode::<WIDTH, HEIGHT, _>(packets);
+        let frames = decode::<WIDTH, HEIGHT, _>(packets, &mut decoding);
         for frame in frames {
             num_frames += 1;
             let frame = frame?;
@@ -291,11 +298,16 @@ pub fn convert<const WIDTH: usize, const HEIGHT: usize>(
     output: PathBuf,
     filters: &DDMFilters,
     format: L0bFormatConfig,
+    progress: &mut impl prodash::NestedProgress,
 ) -> Result<(), Error> {
-    let packets = load::<L0bPacket<WIDTH, HEIGHT>>(input)?;
+    let mut reading = progress.add_child("Read packets");
+    let mut decoding = progress.add_child("Decode frames");
+    let mut encoding = progress.add_child("Encode frames");
+    let mut writing = progress.add_child("Write packets");
+    let packets = load::<L0bPacket<WIDTH, HEIGHT>>(input, &mut reading)?;
 
     process_results(packets, |packets| {
-        let frames = decode::<WIDTH, HEIGHT, _>(packets);
+        let frames = decode::<WIDTH, HEIGHT, _>(packets, &mut decoding);
 
         process_results(frames, |frames| {
             let frames = frames.filter(|frame| {
@@ -305,11 +317,39 @@ pub fn convert<const WIDTH: usize, const HEIGHT: usize>(
                         .contains(&frame.metadata().gps_seconds())
             });
 
-            let packets = encoding::encode(frames, format)?;
+            let packets = encoding::encode(frames, format, &mut encoding)?;
 
-            process_results(packets, |packets| save(output, packets))?
+            process_results(packets, |packets| save(output, packets, &mut writing))?
         })?
     })??;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use proptest::prelude::*;
+
+    use super::*;
+
+    proptest! {
+        #![proptest_config(ProptestConfig { cases: 64, .. ProptestConfig::default() })]
+
+        #[test]
+        fn parse_ranges_includes_range_endpoints(first in any::<u8>(), second in any::<u8>()) {
+            let start = first.min(second);
+            let end = first.max(second);
+            let range = parse_ranges::<u8>(&format!("{start}-{end}")).map_err(|e| TestCaseError::fail(e.to_string()))?;
+
+            prop_assert!(range.contains(&start));
+            prop_assert!(range.contains(&end));
+        }
+
+        #[test]
+        fn parse_ranges_full_for_blank_input(input in "\\s*") {
+            let ranges = parse_ranges::<u8>(&input).map_err(|e| TestCaseError::fail(e.to_string()))?;
+
+            prop_assert!((0..=u8::MAX).all(|value| ranges.contains(&value)));
+        }
+    }
 }

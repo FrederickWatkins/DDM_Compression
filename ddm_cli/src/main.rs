@@ -1,5 +1,5 @@
 //! DDM CLI
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
 
 use clap::{
     Args, CommandFactory as _, Parser, Subcommand,
@@ -7,7 +7,8 @@ use clap::{
     value_parser,
 };
 use ddm_app::{DDMFilters, L0bFormat, L0bFormatConfig, convert, inspect};
-use tracing::{info, level_filters::LevelFilter};
+use prodash::Root as _;
+use tracing::{level_filters::LevelFilter};
 
 #[derive(Parser)]
 struct Cli {
@@ -138,26 +139,48 @@ fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_max_level(LevelFilter::INFO)
         .init();
-    info!("Tracing");
     let args = Cli::parse();
+    let root = Arc::new(prodash::tree::Root::new());
+    let mut options = prodash::render::line::Options::default()
+        .auto_configure(prodash::render::line::StreamKind::Stderr);
+
+    options.terminal_dimensions.0 = options.terminal_dimensions.0.min(80);
+    options.timestamp = false;
+    options.throughput = true;
+    options.frames_per_second = 8.0;
+    options.initial_delay = Some(std::time::Duration::from_millis(250));
+
+    let renderer = prodash::render::line::render(std::io::stderr(), root.downgrade(), options);
 
     match args.command {
         Subcommands::Inspect { input } => {
-            println!("{}", inspect::<20, 52>(input)?);
+            let mut task = root.add_child("Inspect DDM file");
+            task.init(None, None);
+            let result = inspect::<20, 52>(input, &mut task)?;
+            task.done("Done".to_owned());
+            renderer.shutdown_and_wait();
+            println!("{result}");
         }
         Subcommands::Convert {
             input,
             output,
             filters,
             format,
-        } => convert::<20, 52>(
-            input,
-            output,
-            &filters,
-            format
-                .try_into()
-                .unwrap_or_else(|e: clap::Error| exit_clap_error(e)),
-        )?,
+        } => {
+            let mut task = root.add_child("Convert DDM file");
+            task.init(None, None);
+            convert::<20, 52>(
+                input,
+                output,
+                &filters,
+                format
+                    .try_into()
+                    .unwrap_or_else(|e: clap::Error| exit_clap_error(e)),
+                &mut task,
+            )?;
+            task.done("Done".to_owned());
+            renderer.shutdown_and_wait();
+        }
     }
     Ok(())
 }
