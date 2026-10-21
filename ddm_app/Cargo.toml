@@ -23,8 +23,10 @@ tracing = "0.1"
 prodash = { version = "31", features = ["unit-bytes", "unit-human"] }
 human_format = "1"
 anyhow = "1"
+rayon = "1.12.0"
+ndarray = "0.17.2"
 
 [dev-dependencies]
-ddm_core = { path = "../ddm_core", features = ["proptest"] }
+ddm_core = { path = "../ddm_core", features = ["proptest", "serde"] }
 proptest = "1"
 tempfile = "3"

@@ -5,7 +5,9 @@ use std::{
 };
 
 use binrw::BinRead as _;
-use ddm_app::{DDMFilters, L0bFormat, L0bFormatConfig, convert, inspect, parse_ranges};
+use ddm_app::{
+    DDMFilters, L0bFormat, L0bFormatConfig, convert, inspect, parse_ranges,
+};
 use ddm_core::l0b::L0bPacket;
 use prodash::progress::Discard;
 

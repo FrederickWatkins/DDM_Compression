@@ -6,9 +6,11 @@ use clap::{
     error::{ContextKind, ContextValue, ErrorKind},
     value_parser,
 };
-use ddm_app::{DDMFilters, L0bFormat, L0bFormatConfig, convert, inspect};
+use ddm_app::{
+    DDMFilters, HEIGHT, L0bFormat, L0bFormatConfig, WIDTH, compare, convert, inspect,
+};
 use prodash::Root as _;
-use tracing::{level_filters::LevelFilter};
+use tracing::level_filters::LevelFilter;
 
 #[derive(Parser)]
 struct Cli {
@@ -36,6 +38,12 @@ enum Subcommands {
         filters: DDMFilters,
         #[command(flatten)]
         format: L0bFormatArgs,
+    },
+    /// Compare DDM pixels and file metadata
+    Compare {
+        /// Two or more L0b series or Postcard frame files; each is compared with the first
+        #[arg(required = true, num_args = 2..)]
+        files: Vec<PathBuf>,
     },
 }
 
@@ -157,6 +165,14 @@ fn main() -> anyhow::Result<()> {
             let mut task = root.add_child("Inspect DDM file");
             task.init(None, None);
             let result = inspect::<20, 52>(input, &mut task)?;
+            task.done("Done".to_owned());
+            renderer.shutdown_and_wait();
+            println!("{result}");
+        }
+        Subcommands::Compare { files } => {
+            let mut task = root.add_child("Compare DDM files");
+            task.init(None, None);
+            let result = compare::<WIDTH, HEIGHT, _>(files, &mut task)?;
             task.done("Done".to_owned());
             renderer.shutdown_and_wait();
             println!("{result}");

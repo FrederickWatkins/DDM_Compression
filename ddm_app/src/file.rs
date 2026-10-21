@@ -1,14 +1,26 @@
 //! File handling functions
 use std::{
+    ffi::OsString,
     fs::File,
     io::{BufRead as _, BufReader, BufWriter, Seek as _},
     path::PathBuf,
 };
 
 use binrw::{BinRead, BinWrite};
-use ddm_core::error::Error;
+use ddm_core::{self, error::Error};
 use itertools::Itertools as _;
 use prodash::unit::{self, Bytes, Human, display::Mode};
+
+/// File metadata gathered while its frame iterator is consumed.
+#[derive(Debug, Clone)]
+pub struct DDMFileInfo {
+    /// File name.
+    pub file_name: OsString,
+    /// File size in bytes.
+    pub file_size: u64,
+    /// Number of decoded frames.
+    pub num_frames: usize,
+}
 
 /// Load series of T from file
 ///
