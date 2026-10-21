@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["ddm_app", "ddm_cli","ddm_core"]
+members = ["ddm_app", "ddm_cli","ddm_core", "ddm_workbench"]
 package.rust-version = "1.88.0"
 package.license = "MIT"
 

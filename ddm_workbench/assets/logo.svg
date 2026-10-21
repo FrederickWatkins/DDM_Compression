@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%" class="">
+    <defs>
+        <!-- Background Gradient for Rounded Square -->
+        <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#211926" />
+            <stop offset="100%" stop-color="#16111a" />
+        </linearGradient>
+
+        <!-- Peak Curve Gradient -->
+        <linearGradient id="peakGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" stop-color="#9b51e0" />
+            <stop offset="100%" stop-color="#f72585" />
+        </linearGradient>
+
+        <!-- Glow Filter -->
+        <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+            <feGaussianBlur stdDeviation="8" result="blur" />
+            <feComposite in="SourceGraphic" in2="blur" operator="over" />
+        </filter>
+
+        <!-- Clip Path to match rounded square -->
+        <clipPath id="cardClip">
+            <rect width="512" height="512" rx="112" ry="112" />
+        </clipPath>
+    </defs>
+
+    <!-- Outer Rounded Square Base (#181b22 variant) -->
+    <rect width="512" height="512" rx="112" ry="112" fill="url(#bgGrad)" stroke="rgba(155, 81, 224, 0.2)" stroke-width="3" />
+
+    <!-- Clipped Content Group -->
+    <g clip-path="url(#cardClip)">
+        <!-- Subtle Ambient Radar Glow Circle -->
+        <circle cx="256" cy="256" r="160" fill="none" stroke="#9b51e0" stroke-width="1" opacity="0.08" />
+        <circle cx="256" cy="256" r="110" fill="none" stroke="#9b51e0" stroke-width="1" opacity="0.08" />
+        <circle cx="256" cy="256" r="60" fill="none" stroke="#9b51e0" stroke-width="1" opacity="0.08" />
+
+        <!-- Spectrogram Grid Lines -->
+        
+
+        <!-- Radar Sweep Beam -->
+        
+
+        <!-- Doppler Delay Map Heatmap Contour Rings -->
+        <g opacity="0.3" fill="none" stroke="url(#peakGrad)" stroke-width="2">
+            <ellipse cx="256" cy="280" rx="110" ry="45" opacity="0.4" />
+            <ellipse cx="256" cy="280" rx="80" ry="32" opacity="0.7" />
+            <ellipse cx="256" cy="280" rx="50" ry="20" opacity="0.9" />
+        </g>
+
+        <!-- Prominent Glowing Doppler Spectral Peak Arc -->
+        <path d="M 120 340 Q 256 130 392 340" fill="none" stroke="url(#peakGrad)" stroke-width="10" stroke-linecap="round" filter="url(#glow)" />
+        
+        <!-- Sharp Inner Core of Spectral Peak -->
+        <path d="M 120 340 Q 256 130 392 340" fill="none" stroke="#ffffff" stroke-width="3.5" stroke-linecap="round" opacity="0.9" />
+
+        <!-- Peak Apex Marker / Indicator -->
+        <circle cx="256" cy="150" r="6" fill="#ffffff" filter="url(#glow)" />
+        <circle cx="256" cy="150" r="2.5" fill="#9b51e0" />
+    </g>
+
+    <!-- Subtle Inner Highlight Rim -->
+    <rect width="512" height="512" rx="112" ry="112" fill="none" stroke="rgba(255, 255, 255, 0.08)" stroke-width="2" />
+</svg>

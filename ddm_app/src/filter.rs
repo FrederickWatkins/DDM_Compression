@@ -4,7 +4,12 @@ use std::{fmt::Display, str::FromStr};
 use anyhow::anyhow;
 #[cfg(feature = "clap")]
 use clap::Args;
+use ddm_core::l0b::{DDMFrame, DDMFrameMetadata};
+use prodash::Progress;
 use ranges::{Domain, Ranges};
+use tracing::debug;
+
+use crate::pipeline::{PipelineInput, PipelineInputIter, PipelineOutput};
 
 /// Parse comma-separated values and inclusive ranges, e.g. `1,2-4,5`.
 ///
@@ -51,7 +56,8 @@ where
 }
 
 /// Filters for DDM frames.
-#[cfg_attr(feature = "clap", derive(Debug, Args))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "clap", derive(Args))]
 #[cfg_attr(feature = "clap", command(next_help_heading = "DDM filters"))]
 pub struct DDMFilters {
     /// Channel filter.
@@ -62,10 +68,57 @@ pub struct DDMFilters {
     pub gps_seconds: Ranges<u32>,
 }
 
+impl DDMFilters {
+    /// Test whether a DDM frame matches the metadata
+    pub fn contains(&self, metadata: &DDMFrameMetadata) -> bool {
+        self.channel.contains(&metadata.channel())
+            && self.gps_seconds.contains(&metadata.gps_seconds())
+    }
+}
+
+/// Encode frames into packets
+/// 
+/// # Errors
+/// Passes up errors from the pipeline output
+#[tracing::instrument(skip_all, level = "trace")]
+pub fn filter<
+    const WIDTH: usize,
+    const HEIGHT: usize,
+    I: PipelineInput<Item = DDMFrame<WIDTH, HEIGHT>>,
+    O: PipelineOutput<Item = DDMFrame<WIDTH, HEIGHT>>,
+>(
+    input: &mut I,
+    output: &mut O,
+    filter: &DDMFilters,
+    progress: &mut dyn Progress,
+) -> anyhow::Result<()> {
+    debug!(
+        thread_id = ?thread_id::get(),
+        "Started filtering frames"
+    );
+    let mut total_frames = 0;
+    let mut kept_frames = 0;
+    let input = PipelineInputIter(input);
+    for frame in input {
+        total_frames += 1;
+        progress.inc();
+        if filter.contains(&frame.metadata()) {
+            kept_frames += 1;
+            output.send(frame)?;
+        }
+    }
+    debug!(
+        thread_id = ?thread_id::get(),
+        "Finished filtering {total_frames} frames; kept {kept_frames}"
+    );
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::*;
     use proptest::prelude::*;
+
+    use super::*;
 
     proptest! {
         #![proptest_config(ProptestConfig { cases: 64, .. ProptestConfig::default() })]

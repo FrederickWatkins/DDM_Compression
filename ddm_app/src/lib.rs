@@ -1,20 +1,14 @@
-//! DDM file manipulation and analysis.
+//! DDM processing app
 
-pub mod comparison;
-pub mod conversion;
-pub mod encoding;
-pub mod file;
-pub mod filters;
-pub mod format;
-pub mod inspection;
+mod encoding;
+mod filter;
+mod inspect;
+mod l0b;
+mod pipeline;
+mod frame_map;
 
-pub use comparison::{DDMComparisonInfo, compare};
-pub use conversion::convert;
-pub use filters::{DDMFilters, parse_ranges};
-pub use format::{DDMFormat, L0bFormat, L0bFormatConfig};
-pub use inspection::{L0bFileInfo, inspect};
-
-/// DDM frame dimensions used by the input dataset.
-pub const WIDTH: usize = 20;
-/// DDM frame dimensions used by the input dataset.
-pub const HEIGHT: usize = 52;
+pub use encoding::{decode, encode, read, write};
+pub use filter::{DDMFilters, filter as filter, parse_ranges};
+pub use inspect::inspect;
+pub use l0b::{L0bFileInfo, L0bFormat, L0bFormatConfig};
+pub use pipeline::fanout;

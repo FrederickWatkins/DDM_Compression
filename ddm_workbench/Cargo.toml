@@ -1,0 +1,19 @@
+[package]
+name = "ddm_workbench"
+version = "0.1.0"
+edition = "2024"
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+directories = "6"
+iced = { version = "0.14", features = ["svg", "tokio"] }
+iced_aw = "0.14"
+plotters = "0.3"
+plotters-iced2 = "0.14"
+tokio = "1.54"
+tracing-appender = "0.2"
+tracing-subscriber = "0.3"
+
+[lints]
+workspace = true

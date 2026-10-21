@@ -93,12 +93,7 @@ impl<const WIDTH: usize, const HEIGHT: usize> DDMDecoder<WIDTH, HEIGHT>
     type Packet = MP00Packet<WIDTH, HEIGHT>;
 
     fn decode(&mut self, packet: Self::Packet) -> Result<DDMFrame<WIDTH, HEIGHT>, EncodingError> {
-        let metadata = DDMFrameMetadata {
-            channel: packet.header.channel,
-            status_flag: packet.header.status_flag,
-            gps_seconds: packet.header.gps_seconds,
-            sample_clocks: packet.header.sample_clocks,
-        };
+        let metadata = packet.header.into();
         Ok(DDMFrame {
             metadata,
             pixel_data: packet.pixel_data.mapv(|x| x << packet.header.quantisation),
@@ -120,12 +115,30 @@ pub struct MP00Header {
     sample_clocks: i32,
 }
 
+impl From<MP00Header> for DDMFrameMetadata {
+    fn from(value: MP00Header) -> Self {
+        Self {
+            channel: value.channel,
+            status_flag: value.status_flag,
+            gps_seconds: value.gps_seconds,
+            sample_clocks: value.sample_clocks,
+        }
+    }
+}
+
 /// MP00 packet type
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MP00Packet<const WIDTH: usize, const HEIGHT: usize> {
     header: MP00Header,
     pixel_data: Array2<u16>,
+}
+
+impl<const WIDTH: usize, const HEIGHT: usize> MP00Packet<WIDTH, HEIGHT> {
+    /// Packet header
+    pub fn header(&self) -> MP00Header {
+        self.header
+    }
 }
 
 impl<const WIDTH: usize, const HEIGHT: usize> BinRead for MP00Packet<WIDTH, HEIGHT> {

@@ -1,21 +1,33 @@
 //! DDM CLI
-use std::{path::PathBuf, sync::Arc};
+use std::path::PathBuf;
 
 use clap::{
-    Args, CommandFactory as _, Parser, Subcommand,
+    Args, CommandFactory as _, Parser, Subcommand, ValueEnum,
     error::{ContextKind, ContextValue, ErrorKind},
     value_parser,
 };
-use ddm_app::{
-    DDMFilters, HEIGHT, L0bFormat, L0bFormatConfig, WIDTH, compare, convert, inspect,
-};
+use ddm_app::{DDMFilters, L0bFormat, L0bFormatConfig};
 use prodash::Root as _;
 use tracing::level_filters::LevelFilter;
+use tracing_subscriber::fmt::format::FmtSpan;
+
+use crate::convert::convert;
+
+mod convert;
+mod inspect;
+mod table;
+
+const WIDTH: usize = 20;
+const HEIGHT: usize = 52;
 
 #[derive(Parser)]
 struct Cli {
     #[command(subcommand)]
     command: Subcommands,
+    #[arg(long, short, default_value = "warn")]
+    log_level: LogLevel,
+    #[arg(long, short)]
+    quiet: bool,
 }
 
 #[derive(Subcommand)]
@@ -23,8 +35,8 @@ enum Subcommands {
     /// View DDM metadata
     Inspect {
         /// Input .l0b.ddm file
-        #[arg(long, short)]
-        input: PathBuf,
+        #[arg(required = true, num_args = 1..)]
+        input: Vec<PathBuf>,
     },
     /// Filter DDM frames and write filtered output in chosen format
     Convert {
@@ -143,12 +155,37 @@ fn exit_clap_error(error: clap::Error) -> ! {
     error.format(convert_command).exit()
 }
 
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum LogLevel {
+    Trace,
+    Debug,
+    Info,
+    Warn,
+    Error,
+}
+
+impl From<LogLevel> for LevelFilter {
+    fn from(value: LogLevel) -> Self {
+        match value {
+            LogLevel::Trace => Self::TRACE,
+            LogLevel::Debug => Self::DEBUG,
+            LogLevel::Info => Self::INFO,
+            LogLevel::Warn => Self::WARN,
+            LogLevel::Error => Self::ERROR,
+        }
+    }
+}
+
 fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_max_level(LevelFilter::INFO)
-        .init();
     let args = Cli::parse();
-    let root = Arc::new(prodash::tree::Root::new());
+    tracing_subscriber::fmt()
+        .with_max_level(args.log_level)
+        .pretty()
+        .compact()
+        .with_target(true)
+        .with_file(false)
+        .init();
+    let root = prodash::tree::Root::new();
     let mut options = prodash::render::line::Options::default()
         .auto_configure(prodash::render::line::StreamKind::Stderr);
 
@@ -157,25 +194,20 @@ fn main() -> anyhow::Result<()> {
     options.throughput = true;
     options.frames_per_second = 8.0;
     options.initial_delay = Some(std::time::Duration::from_millis(250));
+    if args.quiet {
+        options.level_filter = Some(0..=0);
+    } else {
+        options.level_filter = None;
+    }
 
     let renderer = prodash::render::line::render(std::io::stderr(), root.downgrade(), options);
 
     match args.command {
         Subcommands::Inspect { input } => {
-            let mut task = root.add_child("Inspect DDM file");
-            task.init(None, None);
-            let result = inspect::<20, 52>(input, &mut task)?;
-            task.done("Done".to_owned());
+            let mut progress = root.add_child("Inspect");
+            let output = inspect::inspect(input, &mut progress)?;
             renderer.shutdown_and_wait();
-            println!("{result}");
-        }
-        Subcommands::Compare { files } => {
-            let mut task = root.add_child("Compare DDM files");
-            task.init(None, None);
-            let result = compare::<WIDTH, HEIGHT, _>(files, &mut task)?;
-            task.done("Done".to_owned());
-            renderer.shutdown_and_wait();
-            println!("{result}");
+            println!("{output}");
         }
         Subcommands::Convert {
             input,
@@ -183,20 +215,14 @@ fn main() -> anyhow::Result<()> {
             filters,
             format,
         } => {
-            let mut task = root.add_child("Convert DDM file");
-            task.init(None, None);
-            convert::<20, 52>(
-                input,
-                output,
-                &filters,
-                format
-                    .try_into()
-                    .unwrap_or_else(|e: clap::Error| exit_clap_error(e)),
-                &mut task,
-            )?;
-            task.done("Done".to_owned());
+            let mut progress = root.add_child("Convert");
+            let format = format.try_into().map_err(|e| exit_clap_error(e))?;
+            let output = convert(input, output, &filters, &format, &mut progress)?;
             renderer.shutdown_and_wait();
+            println!("{output}");
         }
+
+        Subcommands::Compare { .. } => todo!(),
     }
     Ok(())
 }

@@ -234,6 +234,22 @@ pub enum L0bPacket<const WIDTH: usize, const HEIGHT: usize> {
     MT00(MT00Packet),
 }
 
+impl<const WIDTH: usize, const HEIGHT: usize> From<MP00Packet<WIDTH, HEIGHT>>
+    for L0bPacket<WIDTH, HEIGHT>
+{
+    fn from(value: MP00Packet<WIDTH, HEIGHT>) -> Self {
+        Self::MP00(value)
+    }
+}
+
+impl<const WIDTH: usize, const HEIGHT: usize> From<MQ00Packet<WIDTH, HEIGHT>>
+    for L0bPacket<WIDTH, HEIGHT>
+{
+    fn from(value: MQ00Packet<WIDTH, HEIGHT>) -> Self {
+        Self::MQ00(value)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{io::Cursor, vec};

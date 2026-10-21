@@ -1,20 +1,8 @@
-//! File and packet format types.
-use std::fmt::Display;
-
-#[cfg(feature = "clap")]
-use clap::ValueEnum;
-
-/// Format used to serialize a selected DDM frame.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "clap", derive(ValueEnum))]
-pub enum DDMFormat {
-    /// Postcard representation of a [`ddm_core::l0b::DDMFrame`].
-    Postcard,
-}
+use std::{collections::HashSet, fmt::Display};
 
 /// Format used for L0b packets containing frame data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[cfg_attr(feature = "clap", derive(ValueEnum))]
+#[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
 pub enum L0bFormat {
     /// MP00 format.
     MP00,
@@ -29,6 +17,20 @@ impl Display for L0bFormat {
             Self::MQ00 => write!(f, "MQ00"),
         }
     }
+}
+
+/// Summary of an L0b file.
+pub struct L0bFileInfo {
+    /// Number of L0b packets
+    pub num_packets: usize,
+    /// Number containing pixel data
+    pub num_frames: usize,
+    /// Formats present in file
+    pub formats: HashSet<L0bFormat>,
+    /// Channels present in file
+    pub channels: HashSet<u8>,
+    /// Range of timestamps
+    pub gps_seconds: (u32, u32),
 }
 
 /// Configuration for L0b output encoding.

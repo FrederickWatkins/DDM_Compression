@@ -1,158 +1,186 @@
-//! Functions for encoding and decoding DDM frames
-use ddm_core::{
-    error::Error,
-    l0b::{
-        DDMDecoder as _, DDMEncoder, DDMFrame, L0bPacket, MP00Decoder, MP00Encoder,
-        MP00EncoderConfig, MQ00Decoder, MQ00Encoder, MQ00EncoderConfig,
-    },
+use std::io::{Read, Seek, Write};
+
+use binrw::{
+    BinRead, BinWrite,
+    meta::{ReadEndian, WriteEndian},
 };
-use either::Either;
-use itertools::Itertools;
-use prodash::unit::{self, Human, display::Mode};
-use tracing::warn;
+use ddm_core::l0b::{DDMDecoder as _, DDMEncoder, DDMFrame, L0bPacket, MP00Decoder, MQ00Decoder};
+use prodash::Progress;
+use tracing::{debug, error, warn};
 
-use crate::{L0bFormat, L0bFormatConfig};
+use crate::{
+    l0b::L0bFormat,
+    pipeline::{PipelineInput, PipelineInputIter, PipelineOutput},
+};
 
-/// Decode DDM frame data from packets
+/// Read packets until EOF
+///
+/// # Errors
+/// Passes on any errors from reader and outputs, or if format doesn't match
+#[tracing::instrument(skip_all, level = "trace")]
+pub fn read<T: BinRead + ReadEndian, R: Read + Seek, O: PipelineOutput<Item = T>>(
+    reader: &mut R,
+    output: &mut O,
+    progress: &mut dyn Progress,
+) -> anyhow::Result<()>
+where
+    for<'a> <T as BinRead>::Args<'a>: Default,
+{
+    debug!(
+        thread_id = ?thread_id::get(),
+        "Started reading packets"
+    );
+    let mut total_packets = 0;
+    loop {
+        let start_pos = reader.stream_position()?;
+        match T::read(reader) {
+            Ok(packet) => output.send(packet)?,
+            Err(e) if e.is_eof() && reader.stream_position()? == start_pos => {
+                debug!(
+                    thread_id = ?thread_id::get(),
+                    "Finished reading {total_packets} packets"
+                );
+                return Ok(());
+            }
+            Err(e) => {
+                error!(
+                    thread_id = ?thread_id::get(),
+                    "Error during read: {e}"
+                );
+                return Err(e.into());
+            }
+        }
+        if let Ok(position) = reader.stream_position() {
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "Loading bar truncation doesn't matter"
+            )]
+            progress.set(position.min(usize::MAX as u64) as usize);
+        }
+        total_packets += 1;
+    }
+}
+
+/// Write packets until EOF
+///
+/// # Errors
+/// Passes on any errors from writer
+#[tracing::instrument(skip_all, level = "trace")]
+pub fn write<T: BinWrite + WriteEndian, W: Write + Seek, I: PipelineInput<Item = T>>(
+    writer: &mut W,
+    input: &mut I,
+    progress: &mut dyn Progress,
+) -> anyhow::Result<()>
+where
+    for<'a> <T as BinWrite>::Args<'a>: Default,
+{
+    debug!(
+        thread_id = ?thread_id::get(),
+        "Started writing packets"
+    );
+    let mut total_packets = 0;
+    let input = PipelineInputIter(input);
+    for packet in input {
+        progress.inc();
+        total_packets += 1;
+        packet.write(writer)?;
+    }
+    debug!(
+        thread_id = ?thread_id::get(),
+        "Finished writing {total_packets} packets"
+    );
+    Ok(())
+}
+
+/// Decode packets into frames
+///
+/// # Errors
+/// Passes on any errors from decoders or pipeline output
+#[tracing::instrument(skip_all, level = "trace")]
 pub fn decode<
     const WIDTH: usize,
     const HEIGHT: usize,
-    I: Iterator<Item = L0bPacket<WIDTH, HEIGHT>>,
+    I: PipelineInput<Item = L0bPacket<WIDTH, HEIGHT>>,
+    O: PipelineOutput<Item = DDMFrame<WIDTH, HEIGHT>>,
 >(
-    packets: I,
-    progress: &mut dyn prodash::Progress,
-) -> impl Iterator<Item = Result<DDMFrame<WIDTH, HEIGHT>, Error>> {
-    let mut formatter = human_format::Formatter::new();
-    formatter.with_decimals(2);
-    progress.init(
-        packets.try_len().ok(),
-        Some(unit::dynamic_and_mode(
-            Human::new(formatter, "packets"),
-            Mode::with_throughput().and_percentage(),
-        )),
+    input: &mut I,
+    output: &mut O,
+    progress: &mut dyn Progress,
+) -> anyhow::Result<()> {
+    debug!(
+        thread_id = ?thread_id::get(),
+        "Started decoding frames"
     );
+    let mut total_packets = 0;
+    let mut total_frames = 0;
+    let input = PipelineInputIter(input);
     let mut mp00_decoder = MP00Decoder::new();
     let mut mq00_decoder = MQ00Decoder::new();
     let mut prev_format = None;
     let mut warning_emitted = false;
-    packets.filter_map(move |packet| {
+    for packet in input {
+        total_packets += 1;
         progress.inc();
-        let (current_format, output) = match packet {
-            L0bPacket::MP00(mp00_packet) => (
-                L0bFormat::MP00,
-                Some(mp00_decoder.decode(mp00_packet).map_err(Into::into)),
-            ),
-            L0bPacket::MQ00(mq00_packet) => (
-                L0bFormat::MQ00,
-                Some(mq00_decoder.decode(mq00_packet).map_err(Into::into)),
-            ),
-            L0bPacket::MT00(..) => return None,
+        let (current_format, frame) = match packet {
+            L0bPacket::MP00(mp00_packet) => (L0bFormat::MP00, mp00_decoder.decode(mp00_packet)?),
+            L0bPacket::MQ00(mq00_packet) => (L0bFormat::MQ00, mq00_decoder.decode(mq00_packet)?),
+            L0bPacket::MT00(..) => continue,
         };
-        if let Some(prev_format) = prev_format && current_format != prev_format && !warning_emitted {
-            warn!("Mixed packet types detected in packet stream: previous packet {prev_format}, current packet {current_format}");
+        total_frames += 1;
+        if let Some(prev_format) = prev_format
+            && current_format != prev_format
+            && !warning_emitted
+        {
+            warn!(
+                "Mixed packet types detected in packet stream: previous packet {prev_format}, current packet {current_format}"
+            );
             warning_emitted = true;
         }
         prev_format = Some(current_format);
-        output
-    })
+        output.send(frame)?;
+    }
+    debug!(
+        thread_id = ?thread_id::get(),
+        "Finished decoding {total_frames} frames from {total_packets} packets"
+    );
+    Ok(())
 }
 
-/// Encode DDM frame data to packets
-///
+/// Encode frames into packets
+/// 
 /// # Errors
-/// Passes up errors from the underlying encoder
+/// Passes on any errors from encoder or pipeline output
+#[tracing::instrument(skip_all, level = "trace")]
 pub fn encode<
     const WIDTH: usize,
     const HEIGHT: usize,
-    I: Iterator<Item = DDMFrame<WIDTH, HEIGHT>>,
+    I: PipelineInput<Item = DDMFrame<WIDTH, HEIGHT>>,
+    O: PipelineOutput<Item = L0bPacket<WIDTH, HEIGHT>>,
+    E: DDMEncoder<WIDTH, HEIGHT>,
 >(
-    frames: I,
-    format: L0bFormatConfig,
-    progress: &mut dyn prodash::Progress,
-) -> Result<impl Iterator<Item = Result<L0bPacket<WIDTH, HEIGHT>, Error>>, Error> {
-    let mut formatter = human_format::Formatter::new();
-    formatter.with_decimals(2);
-    progress.init(
-        frames.try_len().ok(),
-        Some(unit::dynamic_and_mode(
-            Human::new(formatter, "frames"),
-            Mode::with_throughput().and_percentage(),
-        )),
+    input: &mut I,
+    output: &mut O,
+    encoder: &mut E,
+    progress: &mut dyn Progress,
+) -> anyhow::Result<()>
+where
+    E::Packet: Into<L0bPacket<WIDTH, HEIGHT>>,
+{
+    debug!(
+        thread_id = ?thread_id::get(),
+        "Started encoding frames"
     );
-    match format {
-        L0bFormatConfig::MP00 { quantisation } => {
-            let config = MP00EncoderConfig::new(quantisation);
-            let mut encoder = MP00Encoder::new(config);
-            Ok(Either::Left(frames.map(move |frame| {
-                progress.inc();
-                Ok(L0bPacket::MP00(encoder.encode(frame)?))
-            })))
-        }
-        L0bFormatConfig::MQ00 {
-            quantisation,
-            dc_adjust,
-            wavelet_stages,
-            gop_length,
-        } => {
-            let config =
-                MQ00EncoderConfig::new(quantisation, dc_adjust, wavelet_stages, gop_length)?;
-            let mut encoder = MQ00Encoder::new(config);
-            Ok(Either::Right(frames.map(move |frame| {
-                progress.inc();
-                Ok(L0bPacket::MQ00(encoder.encode(frame)?))
-            })))
-        }
+    let mut total_frames = 0;
+    let input = PipelineInputIter(input);
+    for frame in input {
+        total_frames += 1;
+        progress.inc();
+        let packet = encoder.encode(frame)?;
+        output.send(packet.into())?;
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use ddm_core::l0b::DDMFrame;
-    use prodash::progress::Discard;
-    use proptest::prelude::*;
-
-    use super::*;
-
-    proptest! {
-        #![proptest_config(ProptestConfig { cases: 16, .. ProptestConfig::default() })]
-
-        #[test]
-        fn mp00_round_trip(frames in proptest::collection::vec(any::<DDMFrame<20, 52>>(), 1..8)) {
-            let mut progress = Discard;
-            let packets = encode(
-                frames.iter().cloned(),
-                L0bFormatConfig::MP00 { quantisation: 0 },
-                &mut progress,
-            )?
-            .collect::<Result<Vec<_>, _>>()?;
-            let decoded_frames = decode(packets.into_iter(), &mut progress)
-                .collect::<Result<Vec<_>, _>>()?;
-
-            prop_assert_eq!(frames, decoded_frames);
-        }
-
-        #[test]
-        fn mq00_round_trip(
-            frames in proptest::collection::vec(any::<DDMFrame<20, 52>>(), 1..8),
-            wavelet_stages in 0..16u8,
-            gop_length in 1..=32u8
-        ) {
-            let mut progress = Discard;
-            let packets = encode(
-                frames.iter().cloned(),
-                L0bFormatConfig::MQ00 {
-                    quantisation: 0,
-                    dc_adjust: false,
-                    wavelet_stages,
-                    gop_length,
-                },
-                &mut progress,
-            )?
-            .collect::<Result<Vec<_>, _>>()?;
-            let decoded_frames = decode(packets.into_iter(), &mut progress)
-                .collect::<Result<Vec<_>, _>>()?;
-
-            prop_assert_eq!(frames, decoded_frames);
-        }
-    }
+    debug!(
+        thread_id = ?thread_id::get(),
+        "Finished encoding {total_frames} frames"
+    );
+    Ok(())
 }

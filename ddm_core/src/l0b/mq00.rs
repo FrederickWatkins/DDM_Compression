@@ -260,12 +260,7 @@ impl<const WIDTH: usize, const HEIGHT: usize> DDMDecoder<WIDTH, HEIGHT>
     type Packet = MQ00Packet<WIDTH, HEIGHT>;
 
     fn decode(&mut self, packet: Self::Packet) -> Result<DDMFrame<WIDTH, HEIGHT>, EncodingError> {
-        let metadata = DDMFrameMetadata {
-            channel: packet.header.channel,
-            status_flag: packet.header.status_flag,
-            gps_seconds: packet.header.gps_seconds,
-            sample_clocks: packet.header.sample_clocks,
-        };
+        let metadata: DDMFrameMetadata = packet.header.into();
 
         let stages = packet.header.quantisation_wavelet_stages & 0xF;
         let quantisation = (packet.header.quantisation_wavelet_stages >> 4) & 0xF;
@@ -330,6 +325,17 @@ pub struct MQ00Header {
     sample_clocks: i32,
 }
 
+impl From<MQ00Header> for DDMFrameMetadata {
+    fn from(value: MQ00Header) -> Self {
+        Self {
+            channel: value.channel,
+            status_flag: value.status_flag,
+            gps_seconds: value.gps_seconds,
+            sample_clocks: value.sample_clocks,
+        }
+    }
+}
+
 #[cfg(any(test, feature = "proptest"))]
 impl proptest::arbitrary::Arbitrary for MQ00Header {
     type Parameters = ();
@@ -379,6 +385,13 @@ impl proptest::arbitrary::Arbitrary for MQ00Header {
 pub struct MQ00Packet<const WIDTH: usize, const HEIGHT: usize> {
     header: MQ00Header,
     pixel_data: Array2<i32>,
+}
+
+impl<const WIDTH: usize, const HEIGHT: usize> MQ00Packet<WIDTH, HEIGHT> {
+    /// Packet header
+    pub fn header(&self) -> MQ00Header {
+        self.header
+    }
 }
 
 impl<const WIDTH: usize, const HEIGHT: usize> BinRead for MQ00Packet<WIDTH, HEIGHT> {
