@@ -79,7 +79,7 @@ where
         "Started writing packets"
     );
     let mut total_packets = 0;
-    let input = PipelineInputIter(input);
+    let input = PipelineInputIter::new(input);
     for packet in input {
         progress.inc();
         total_packets += 1;
@@ -113,7 +113,7 @@ pub fn decode<
     );
     let mut total_packets = 0;
     let mut total_frames = 0;
-    let input = PipelineInputIter(input);
+    let input = PipelineInputIter::new(input);
     let mut mp00_decoder = MP00Decoder::new();
     let mut mq00_decoder = MQ00Decoder::new();
     let mut prev_format = None;
@@ -146,8 +146,8 @@ pub fn decode<
     Ok(())
 }
 
-/// Encode frames into packets
-/// 
+/// Encode frames into packets.
+///
 /// # Errors
 /// Passes on any errors from encoder or pipeline output
 #[tracing::instrument(skip_all, level = "trace")]
@@ -171,7 +171,7 @@ where
         "Started encoding frames"
     );
     let mut total_frames = 0;
-    let input = PipelineInputIter(input);
+    let input = PipelineInputIter::new(input);
     for frame in input {
         total_frames += 1;
         progress.inc();

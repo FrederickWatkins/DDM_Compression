@@ -30,8 +30,17 @@ pub struct L0bFileInfo {
     pub formats: HashSet<L0bFormat>,
     /// Channels present in file
     pub channels: HashSet<u8>,
-    /// Range of timestamps
-    pub gps_seconds: (u32, u32),
+    /// Inclusive range of timestamps present in the file.
+    pub gps_seconds: Option<GpsSecondRange>,
+}
+
+/// Inclusive range of GPS seconds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct GpsSecondRange {
+    /// First GPS second in the range.
+    pub start: u32,
+    /// Last GPS second in the range.
+    pub end: u32,
 }
 
 /// Configuration for L0b output encoding.

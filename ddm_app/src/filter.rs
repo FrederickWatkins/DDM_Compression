@@ -76,8 +76,8 @@ impl DDMFilters {
     }
 }
 
-/// Encode frames into packets
-/// 
+/// Keep only frames that match the selected channel and GPS second ranges.
+///
 /// # Errors
 /// Passes up errors from the pipeline output
 #[tracing::instrument(skip_all, level = "trace")]
@@ -98,7 +98,7 @@ pub fn filter<
     );
     let mut total_frames = 0;
     let mut kept_frames = 0;
-    let input = PipelineInputIter(input);
+    let input = PipelineInputIter::new(input);
     for frame in input {
         total_frames += 1;
         progress.inc();

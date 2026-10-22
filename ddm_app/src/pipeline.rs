@@ -1,14 +1,39 @@
 use std::collections::VecDeque;
+use std::sync::mpsc;
 
 use tracing::trace;
 
-pub struct PipelineInputIter<'a, I>(pub &'a mut I);
+/// A bounded standard-library channel used to connect pipeline stages.
+pub struct PipelineChannel<T> {
+    /// Sends items to the receiving pipeline stage.
+    pub sender: mpsc::SyncSender<T>,
+    /// Receives items from the sending pipeline stage.
+    pub receiver: mpsc::Receiver<T>,
+}
+
+impl<T> PipelineChannel<T> {
+    /// Create a bounded channel with the given capacity.
+    pub fn bounded(capacity: usize) -> Self {
+        let (sender, receiver) = mpsc::sync_channel(capacity);
+        Self { sender, receiver }
+    }
+}
+
+pub struct PipelineInputIter<'a, I> {
+    input: &'a mut I,
+}
+
+impl<'a, I> PipelineInputIter<'a, I> {
+    pub fn new(input: &'a mut I) -> Self {
+        Self { input }
+    }
+}
 
 impl<I: PipelineInput> Iterator for PipelineInputIter<'_, I> {
     type Item = I::Item;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.0.recv()
+        self.input.recv()
     }
 }
 
@@ -26,7 +51,7 @@ pub trait PipelineOutput {
 
 /// Fan a single stream into multiple. All consumers receive every item, and the stream will wait on
 /// a slow consumer
-/// 
+///
 /// # Errors
 /// Passes on any errors from outputs
 #[tracing::instrument(skip_all, level = "trace")]
@@ -84,30 +109,30 @@ impl<T> PipelineOutput for &mut VecDeque<T> {
     }
 }
 
-impl<T> PipelineInput for std::sync::mpsc::Receiver<T> {
+impl<T> PipelineInput for mpsc::Receiver<T> {
     type Item = T;
 
     fn recv(&mut self) -> Option<Self::Item> {
         #[expect(clippy::use_self, reason = "False positive")]
-        std::sync::mpsc::Receiver::recv(self).ok()
+        mpsc::Receiver::recv(self).ok()
     }
 }
 
-impl<T: Send + Sync + 'static> PipelineOutput for std::sync::mpsc::Sender<T> {
+impl<T: Send + Sync + 'static> PipelineOutput for mpsc::Sender<T> {
     type Item = T;
 
     fn send(&mut self, item: Self::Item) -> anyhow::Result<()> {
         #[expect(clippy::use_self, reason = "False positive")]
-        std::sync::mpsc::Sender::send(self, item).map_err(Into::into)
+        mpsc::Sender::send(self, item).map_err(Into::into)
     }
 }
 
-impl<T: Send + Sync + 'static> PipelineOutput for std::sync::mpsc::SyncSender<T> {
+impl<T: Send + Sync + 'static> PipelineOutput for mpsc::SyncSender<T> {
     type Item = T;
 
     fn send(&mut self, item: Self::Item) -> anyhow::Result<()> {
         #[expect(clippy::use_self, reason = "False positive")]
-        std::sync::mpsc::SyncSender::send(self, item).map_err(Into::into)
+        mpsc::SyncSender::send(self, item).map_err(Into::into)
     }
 }
 
@@ -166,8 +191,7 @@ impl<T: Send + Sync + 'static> PipelineOutput for flume::Sender<T> {
 
     fn send(&mut self, item: Self::Item) -> anyhow::Result<()> {
         #[expect(clippy::use_self, reason = "False positive")]
-        flume::Sender::send(self, item).map_err(|_| {
-            anyhow::anyhow!("Failed to send item: all receivers have been dropped")
-        })
+        flume::Sender::send(self, item)
+            .map_err(|_| anyhow::anyhow!("Failed to send item: all receivers have been dropped"))
     }
 }

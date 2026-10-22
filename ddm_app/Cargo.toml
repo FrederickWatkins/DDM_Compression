@@ -16,7 +16,6 @@ workspace = true
 
 [dependencies]
 binrw = "0.15"
-comfy-table = "8"
 ddm_core = { path = "../ddm_core" }
 ranges = "0.4"
 tracing = "0.1"

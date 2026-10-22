@@ -10,16 +10,14 @@ anyhow = "1"
 tracing = { version = "0.1" }
 clap = { version = "4", features = ["derive"] }
 ddm_app = { path = "../ddm_app", features = ["clap"] }
-ddm_core = { path = "../ddm_core" }
 tracing-subscriber = { version = "0.3", features = ["fmt"] }
 prodash = { version = "31", features = [
     "render-line",
     "render-line-crossterm",
     "render-line-autoconfigure",
 ] }
-human_format = "1"
 comfy-table = "8"
-thread-id = "5.1.0"
+human_format = "1"
 
 [lints]
 workspace = true

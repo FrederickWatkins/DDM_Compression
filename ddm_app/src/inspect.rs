@@ -5,7 +5,7 @@ use prodash::Progress;
 use tracing::debug;
 
 use crate::{
-    l0b::{L0bFileInfo, L0bFormat},
+    l0b::{GpsSecondRange, L0bFileInfo, L0bFormat},
     pipeline::{PipelineInput, PipelineInputIter},
 };
 
@@ -23,12 +23,12 @@ pub fn inspect<
         thread_id = ?thread_id::get(),
         "Started inspecting packets"
     );
-    let frames = PipelineInputIter(frames);
+    let frames = PipelineInputIter::new(frames);
     let mut num_packets = 0;
     let mut num_frames = 0;
     let mut formats = HashSet::new();
     let mut channels = HashSet::new();
-    let mut gps_seconds = (u32::MAX, 0);
+    let mut gps_seconds: Option<GpsSecondRange> = None;
     for frame in frames {
         progress.inc();
         num_packets += 1;
@@ -49,8 +49,13 @@ pub fn inspect<
         }
 
         channels.insert(metadata.channel());
-        gps_seconds.0 = gps_seconds.0.min(metadata.gps_seconds());
-        gps_seconds.1 = gps_seconds.1.max(metadata.gps_seconds());
+        let timestamp = metadata.gps_seconds();
+        let range = gps_seconds.get_or_insert(GpsSecondRange {
+            start: timestamp,
+            end: timestamp,
+        });
+        range.start = range.start.min(timestamp);
+        range.end = range.end.max(timestamp);
     }
 
     debug!(

@@ -199,7 +199,7 @@ impl<const WIDTH: usize, const HEIGHT: usize> DDMEncoder<WIDTH, HEIGHT>
             MQ00PacketKind::Predictive => {
                 let previous = &self.prev_frame[frame.metadata.channel as usize];
                 let current = frame.pixel_data.mapv(i32::from);
-                let new = &current.clone() - previous;
+                let new = &current - previous;
                 self.prev_frame[frame.metadata.channel as usize] = current;
                 new
             }
@@ -211,7 +211,7 @@ impl<const WIDTH: usize, const HEIGHT: usize> DDMEncoder<WIDTH, HEIGHT>
                 .try_into()
                 .map_err(|_| EncodingError::InvalidInput {
                     name: "dc_offset",
-                    var_type: "u16",
+                    var_type: "i16",
                     value: i64::from(dc_offset_raw),
                 })?
         } else {
@@ -224,11 +224,19 @@ impl<const WIDTH: usize, const HEIGHT: usize> DDMEncoder<WIDTH, HEIGHT>
             *pixel >>= self.config.quantisation;
         }
 
+        let bits_per_coefficient = pixel_data
+            .iter()
+            .filter_map(|pixel| pixel.abs().checked_ilog2())
+            .max()
+            .unwrap_or(32 - u32::from(self.config.quantisation))
+            .try_into()
+            .unwrap_or(32 - self.config.quantisation) + 1;
+
         let header = MQ00Header {
             channel: frame.metadata.channel,
             status_flag: frame.metadata.status_flag,
             quantisation_wavelet_stages: self.config.quantisation << 4 | self.config.wavelet_stages,
-            bits_per_coefficient: 32 - self.config.quantisation,
+            bits_per_coefficient,
             packet_kind,
             dc_offset,
             gps_seconds: frame.metadata.gps_seconds,

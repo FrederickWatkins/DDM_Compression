@@ -38,7 +38,7 @@ impl ComparisonResult {
         if self.mse.abs() == 0.0 {
             f64::INFINITY
         } else {
-            10.0 * ((u16::MAX as f64).powi(2) / self.mse).log10()
+            10.0 * (f64::from(u16::MAX).powi(2) / self.mse).log10()
         }
     }
 }
@@ -91,14 +91,14 @@ pub fn compare<const WIDTH: usize, const HEIGHT: usize>(
             }
         }
     }
-    if results.is_empty() {
-        return None;
-    }
     let worst_case = results
         .iter()
         .copied()
-        .max_by(|a, b| a.mse.total_cmp(&b.mse))
-        .unwrap();
+        .max_by(|a, b| a.mse.total_cmp(&b.mse))?;
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "The number of frames cannot practically exceed f64's exact integer range"
+    )]
     let mean = ComparisonResult {
         mse: results.iter().map(|result| result.mse).sum::<f64>() / results.len() as f64,
     };
@@ -123,6 +123,10 @@ pub fn compare_frames<const WIDTH: usize, const HEIGHT: usize>(
             squared_error += difference * difference;
         });
 
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "The fixed frame dimensions are used as a floating point pixel count"
+    )]
     ComparisonResult {
         mse: squared_error / (WIDTH * HEIGHT) as f64,
     }

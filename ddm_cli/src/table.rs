@@ -1,4 +1,57 @@
 use ddm_app::{AggregateComparisonResult, L0bFileInfo};
+use human_format::Formatter;
+
+/// Basic file metadata
+pub struct FileInfoEntry {
+    /// Filename
+    pub name: String,
+    /// Size in bytes
+    pub size: u64,
+    /// Encoding info
+    pub info: L0bFileInfo,
+}
+
+/// Encoding error comparison
+pub struct ComparisonInfoEntry {
+    /// File info
+    pub file: FileInfoEntry,
+    /// Error info
+    pub comparison: Option<AggregateComparisonResult>,
+}
+
+trait FileInfoRow {
+    fn name(&self) -> &str;
+    fn size(&self) -> u64;
+    fn info(&self) -> &L0bFileInfo;
+}
+
+impl FileInfoRow for FileInfoEntry {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn info(&self) -> &L0bFileInfo {
+        &self.info
+    }
+
+    fn size(&self) -> u64 {
+        self.size
+    }
+}
+
+impl FileInfoRow for ComparisonInfoEntry {
+    fn name(&self) -> &str {
+        &self.file.name
+    }
+
+    fn info(&self) -> &L0bFileInfo {
+        &self.file.info
+    }
+
+    fn size(&self) -> u64 {
+        self.file.size
+    }
+}
 
 fn add_property_row(
     table: &mut comfy_table::Table,
@@ -10,6 +63,16 @@ fn add_property_row(
             .chain(values)
             .collect::<Vec<_>>(),
     );
+}
+
+fn format_size(size: u64) -> String {
+    let mut formatter = Formatter::new();
+    formatter
+        .with_decimals(2)
+        .with_separator("")
+        .with_units("B");
+    #[expect(clippy::cast_precision_loss, reason = "file metadata so don't care")]
+    formatter.format(size as f64)
 }
 
 fn format_formats(info: &L0bFileInfo) -> String {
@@ -41,70 +104,77 @@ fn format_channels(info: &L0bFileInfo) -> String {
 }
 
 fn format_gps_seconds(info: &L0bFileInfo) -> String {
-    if info.num_frames == 0 {
-        "None".to_owned()
-    } else {
-        format!("{}-{}", info.gps_seconds.0, info.gps_seconds.1)
+    match info.gps_seconds {
+        Some(range) => format!("{}-{}", range.start, range.end),
+        None => "None".to_owned(),
     }
 }
 
-pub fn format_file_info(infos: &[(String, L0bFileInfo)]) -> comfy_table::Table {
+fn format_info_rows<R: FileInfoRow>(infos: &[R]) -> comfy_table::Table {
     let mut table = comfy_table::Table::new();
 
     table.set_header(
         std::iter::once("File".to_owned())
-            .chain(infos.iter().map(|(name, _)| name.clone()))
+            .chain(infos.iter().map(|entry| entry.name().to_owned()))
             .collect::<Vec<_>>(),
     );
 
     add_property_row(
         &mut table,
+        "Size",
+        infos.iter().map(|entry| format_size(entry.size())),
+    );
+
+    add_property_row(
+        &mut table,
         "Packets",
-        infos.iter().map(|(_, info)| info.num_packets.to_string()),
+        infos
+            .iter()
+            .map(|entry| entry.info().num_packets.to_string()),
     );
 
     add_property_row(
         &mut table,
         "DDM frames",
-        infos.iter().map(|(_, info)| info.num_frames.to_string()),
+        infos
+            .iter()
+            .map(|entry| entry.info().num_frames.to_string()),
     );
 
     add_property_row(
         &mut table,
         "Formats",
-        infos.iter().map(|(_, info)| format_formats(info)),
+        infos.iter().map(|entry| format_formats(entry.info())),
     );
 
     add_property_row(
         &mut table,
         "Channels",
-        infos.iter().map(|(_, info)| format_channels(info)),
+        infos.iter().map(|entry| format_channels(entry.info())),
     );
 
     add_property_row(
         &mut table,
         "GPS seconds (inclusive)",
-        infos.iter().map(|(_, info)| format_gps_seconds(info)),
+        infos.iter().map(|entry| format_gps_seconds(entry.info())),
     );
     table
 }
 
-pub fn format_comparison_info(
-    infos: &[(String, L0bFileInfo, Option<AggregateComparisonResult>)],
-) -> comfy_table::Table {
-    let mut base_info = vec![];
-    let mut comparison_info = vec![];
-    for info in infos {
-        base_info.push((info.0.clone(), info.1.clone()));
-        comparison_info.push(info.2);
-    }
-    let mut table = format_file_info(&base_info);
+/// Format basic file info
+pub fn format_file_info(infos: &[FileInfoEntry]) -> comfy_table::Table {
+    format_info_rows(infos)
+}
+
+/// Format basic file info and error comparison
+pub fn format_comparison_info(infos: &[ComparisonInfoEntry]) -> comfy_table::Table {
+    let mut table = format_info_rows(infos);
     add_property_row(
         &mut table,
         "Average error",
-        comparison_info.iter().map(|info| {
-            if let Some(info) = info {
-                format!("{}", info.mean)
+        infos.iter().map(|entry| {
+            if let Some(comparison) = entry.comparison {
+                format!("{}", comparison.mean)
             } else {
                 "-".to_owned()
             }
@@ -113,9 +183,9 @@ pub fn format_comparison_info(
     add_property_row(
         &mut table,
         "Worst case error",
-        comparison_info.iter().map(|info| {
-            if let Some(info) = info {
-                format!("{}", info.worst_case)
+        infos.iter().map(|entry| {
+            if let Some(comparison) = entry.comparison {
+                format!("{}", comparison.worst_case)
             } else {
                 "-".to_owned()
             }
