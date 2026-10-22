@@ -28,7 +28,7 @@ struct ComparisonTask {
 }
 
 /// Compare encoding and error of files. First file is the reference
-/// 
+///
 /// # Errors
 /// If any of the source files can't be opened or contain invalid data
 pub fn compare<I: IntoIterator<Item = impl AsRef<Path>>, P>(
@@ -67,7 +67,12 @@ where
         .map_err(|_| anyhow::anyhow!("Reference loading thread panicked"))??;
     let reference_frames = Arc::new(reference.frames);
 
-    let mut report = Vec::with_capacity(other_tasks.len() + 1);
+    let report_capacity = other_tasks
+        .len()
+        .checked_add(1)
+        .ok_or_else(|| anyhow::anyhow!("comparison report size overflow"))?;
+    let mut report = Vec::new();
+    report.try_reserve_exact(report_capacity)?;
     report.push(ComparisonInfoEntry {
         file: FileInfoEntry {
             name: reference_task.name,

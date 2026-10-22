@@ -150,6 +150,34 @@ impl Default for MQ00EncoderConfig {
     }
 }
 
+fn next_packet_kind(
+    packets_since_intra: &mut [usize; 16],
+    channel: u8,
+    gop_length: u8,
+) -> Result<MQ00PacketKind, EncodingError> {
+    let Some(packet_count) = packets_since_intra.get_mut(usize::from(channel)) else {
+        return Err(EncodingError::InvalidInput {
+            name: "channel",
+            var_type: "0..=15",
+            value: i64::from(channel),
+        });
+    };
+    let predictive_limit = usize::from(gop_length).saturating_sub(1);
+    if *packet_count < predictive_limit {
+        *packet_count = packet_count
+            .checked_add(1)
+            .ok_or(EncodingError::InvalidInput {
+                name: "packets_since_intra",
+                var_type: "usize",
+                value: i64::MAX,
+            })?;
+        Ok(MQ00PacketKind::Predictive)
+    } else {
+        *packet_count = 0;
+        Ok(MQ00PacketKind::Intra)
+    }
+}
+
 /// Encoder capable of converting raw DDM frame data into encoded MQ00 packets
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -180,27 +208,50 @@ impl<const WIDTH: usize, const HEIGHT: usize> DDMEncoder<WIDTH, HEIGHT>
         &mut self,
         frame: DDMFrame<WIDTH, HEIGHT>,
     ) -> Result<MQ00Packet<WIDTH, HEIGHT>, EncodingError> {
-        let packet_kind = if self.packets_since_intra[frame.metadata.channel as usize]
-            < self.config.gop_length as usize - 1
-        {
-            self.packets_since_intra[frame.metadata.channel as usize] += 1;
-            MQ00PacketKind::Predictive
-        } else {
-            self.packets_since_intra[frame.metadata.channel as usize] = 0;
-            MQ00PacketKind::Intra
-        };
+        let channel = usize::from(frame.metadata.channel);
+        let packet_kind = next_packet_kind(
+            &mut self.packets_since_intra,
+            frame.metadata.channel,
+            self.config.gop_length,
+        )?;
 
         let mut pixel_data = match packet_kind {
             MQ00PacketKind::Intra => {
                 let current = frame.pixel_data.mapv(i32::from);
-                self.prev_frame[frame.metadata.channel as usize].clone_from(&current);
+                self.prev_frame
+                    .get_mut(channel)
+                    .ok_or(EncodingError::InvalidInput {
+                        name: "channel",
+                        var_type: "0..=15",
+                        value: i64::from(frame.metadata.channel),
+                    })?
+                    .clone_from(&current);
                 current
             }
             MQ00PacketKind::Predictive => {
-                let previous = &self.prev_frame[frame.metadata.channel as usize];
+                let previous = self
+                    .prev_frame
+                    .get(channel)
+                    .ok_or(EncodingError::InvalidInput {
+                        name: "channel",
+                        var_type: "0..=15",
+                        value: i64::from(frame.metadata.channel),
+                    })?;
                 let current = frame.pixel_data.mapv(i32::from);
-                let new = &current - previous;
-                self.prev_frame[frame.metadata.channel as usize] = current;
+                let mut new = current.clone();
+                for (difference, (&current, &previous)) in
+                    new.iter_mut().zip(current.iter().zip(previous.iter()))
+                {
+                    *difference = current.wrapping_sub(previous);
+                }
+                self.prev_frame
+                    .get_mut(channel)
+                    .ok_or(EncodingError::InvalidInput {
+                        name: "channel",
+                        var_type: "0..=15",
+                        value: i64::from(frame.metadata.channel),
+                    })?
+                    .clone_from(&current);
                 new
             }
         };
@@ -218,19 +269,22 @@ impl<const WIDTH: usize, const HEIGHT: usize> DDMEncoder<WIDTH, HEIGHT>
             0
         };
 
-        dwt(pixel_data.view_mut(), self.config.wavelet_stages);
+        dwt(pixel_data.view_mut(), self.config.wavelet_stages)?;
 
         for pixel in &mut pixel_data {
-            *pixel >>= self.config.quantisation;
+            *pixel = pixel
+                .checked_shr(u32::from(self.config.quantisation))
+                .unwrap_or(0);
         }
 
         let bits_per_coefficient = pixel_data
             .iter()
-            .filter_map(|pixel| pixel.abs().checked_ilog2())
+            .filter_map(|pixel| pixel.unsigned_abs().checked_ilog2())
             .max()
-            .unwrap_or(32 - u32::from(self.config.quantisation))
+            .unwrap_or(32u32.saturating_sub(u32::from(self.config.quantisation)))
             .try_into()
-            .unwrap_or(32 - self.config.quantisation) + 1;
+            .unwrap_or(32u8.saturating_sub(self.config.quantisation))
+            .saturating_add(1);
 
         let header = MQ00Header {
             channel: frame.metadata.channel,
@@ -276,26 +330,40 @@ impl<const WIDTH: usize, const HEIGHT: usize> DDMDecoder<WIDTH, HEIGHT>
         let mut pixel_data_i32 = packet.pixel_data;
 
         for pixel in &mut pixel_data_i32 {
-            *pixel <<= quantisation;
+            *pixel = pixel.checked_shl(u32::from(quantisation)).unwrap_or(0);
         }
 
-        idwt(pixel_data_i32.view_mut(), stages);
+        idwt(pixel_data_i32.view_mut(), stages)?;
 
         inverse_dc_adjust(
             pixel_data_i32.view_mut(),
             i32::from(packet.header.dc_offset),
-        );
+        )?;
 
         match packet.header.packet_kind {
-            MQ00PacketKind::Intra => {
-                self.prev_frame[metadata.channel as usize].clone_from(&pixel_data_i32);
-            }
+            MQ00PacketKind::Intra => {}
             MQ00PacketKind::Predictive => {
-                let previous = &self.prev_frame[metadata.channel as usize];
-                pixel_data_i32 += previous;
-                self.prev_frame[metadata.channel as usize].clone_from(&pixel_data_i32);
+                let previous = &self.prev_frame.get(metadata.channel as usize).ok_or(
+                    EncodingError::InvalidInput {
+                        name: "channel",
+                        var_type: "0..=15",
+                        value: i64::from(metadata.channel),
+                    },
+                )?;
+                for (pixel, prev_pixel) in pixel_data_i32.iter_mut().zip(previous.iter()) {
+                    *pixel = pixel.wrapping_add(*prev_pixel);
+                }
             }
         }
+
+        self.prev_frame
+            .get_mut(metadata.channel as usize)
+            .ok_or(EncodingError::InvalidInput {
+                name: "channel",
+                var_type: "0..=15",
+                value: i64::from(metadata.channel),
+            })?
+            .clone_from(&pixel_data_i32);
 
         let mut pixel_data = Array2::from_elem([HEIGHT, WIDTH], 0);
 
@@ -431,7 +499,16 @@ impl<const WIDTH: usize, const HEIGHT: usize> BinRead for MQ00Packet<WIDTH, HEIG
         let calculated_crc = crc_reader.finalize();
 
         // Align the complete packet after its CRC.
-        let bytes_decoded = (end_pos - start_pos) + 4;
+        let bytes_decoded = end_pos
+            .checked_sub(start_pos)
+            .and_then(|bytes| bytes.checked_add(4))
+            .ok_or_else(|| binrw::Error::Custom {
+                pos: end_pos,
+                err: Box::new(binrw::io::Error::new(
+                    binrw::io::ErrorKind::InvalidData,
+                    "invalid MQ00 packet position",
+                )),
+            })?;
 
         // The CRC immediately follows the encoded pixels and is stored little-endian.
         let crc = u32::read_options(reader, Endian::Little, args)?;
@@ -490,13 +567,23 @@ impl<const WIDTH: usize, const HEIGHT: usize> BinWrite for MQ00Packet<WIDTH, HEI
         crc.write_options(writer, Endian::Little, args)?;
 
         // Align the complete packet after its CRC.
-        let bytes_encoded = end_pos - start_pos + 4;
+        let bytes_encoded = end_pos
+            .checked_sub(start_pos)
+            .and_then(|bytes| bytes.checked_add(4))
+            .ok_or_else(|| binrw::Error::Custom {
+                pos: end_pos,
+                err: Box::new(binrw::io::Error::new(
+                    binrw::io::ErrorKind::InvalidData,
+                    "invalid MQ00 packet position",
+                )),
+            })?;
         if !bytes_encoded.is_multiple_of(4) {
             let target_distance = 4 - (bytes_encoded % 4);
             #[expect(
                 clippy::cast_possible_truncation,
                 reason = "Target distance max value is 3"
             )]
+            #[expect(clippy::indexing_slicing, reason = "target distance is less than three")]
             writer.write_all(&[0u8; 3][..target_distance as usize])?;
         }
 
@@ -522,19 +609,21 @@ impl<const WIDTH: usize, const HEIGHT: usize> proptest::arbitrary::Arbitrary
     fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
         use proptest::prelude::*;
 
-        #[expect(clippy::expect_used, reason = "Calculation guarantees same size")]
         (any::<MQ00Header>())
             .prop_flat_map(|header| {
                 (
                     Just(header),
-                    proptest::collection::vec(any::<i32>(), WIDTH * HEIGHT),
+                    proptest::collection::vec(any::<i32>(), WIDTH.saturating_mul(HEIGHT)),
                 )
             })
-            .prop_map(|(header, pixels)| Self {
-                header,
-                pixel_data: Array2::from_shape_vec((HEIGHT, WIDTH), pixels)
-                    .expect("pixel count matches array dimensions"),
-            })
+            .prop_filter_map(
+                "packet dimensions must be representable",
+                |(header, pixels)| {
+                    Array2::from_shape_vec((HEIGHT, WIDTH), pixels)
+                        .ok()
+                        .map(|pixel_data| Self { header, pixel_data })
+                },
+            )
             .boxed()
     }
 }
@@ -545,36 +634,58 @@ fn dc_adjust(mut pixel_data: ArrayViewMut2<i32>) -> i32 {
     mean
 }
 
-fn inverse_dc_adjust(mut pixel_data: ArrayViewMut2<i32>, offset: i32) {
-    pixel_data += offset;
+fn inverse_dc_adjust(mut pixel_data: ArrayViewMut2<i32>, offset: i32) -> Result<(), EncodingError> {
+    for pixel in &mut pixel_data {
+        *pixel = pixel
+            .checked_add(offset)
+            .ok_or(EncodingError::InvalidInput {
+                name: "dc_adjusted_pixel",
+                var_type: "i32",
+                value: i64::from(*pixel),
+            })?;
+    }
+    Ok(())
 }
 
-fn dwt(mut pixel_data: ArrayViewMut2<i32>, stages: u8) {
+fn dwt(
+    mut pixel_data: ArrayViewMut2<i32>,
+    stages: u8,
+) -> Result<(), crate::coding::wavelet::WaveletError> {
     let dim = pixel_data.dim();
     for i in 0..stages {
-        let chunk_sizes = [dim.0 / (1 << i), dim.1 / (1 << i)];
+        let chunk_sizes = [
+            dim.0.checked_shr(u32::from(i)).unwrap_or(0),
+            dim.1.checked_shr(u32::from(i)).unwrap_or(0),
+        ];
         if chunk_sizes.contains(&0) {
-            return;
+            return Ok(());
         }
         if let Some(mut subband) = pixel_data
             .axis_chunks_iter_mut(Axis(0), chunk_sizes[0])
             .next()
         {
             if let Some(subband) = subband.axis_chunks_iter_mut(Axis(1), chunk_sizes[1]).next() {
-                dwt_53_nd(subband, &[Axis(0), Axis(1)]);
+                dwt_53_nd(subband, &[Axis(0), Axis(1)])?;
             } else {
-                return;
+                return Ok(());
             }
         } else {
-            return;
+            return Ok(());
         }
     }
+    Ok(())
 }
 
-fn idwt(mut pixel_data: ArrayViewMut2<i32>, stages: u8) {
+fn idwt(
+    mut pixel_data: ArrayViewMut2<i32>,
+    stages: u8,
+) -> Result<(), crate::coding::wavelet::WaveletError> {
     let dim = pixel_data.dim();
     for i in (0..stages).rev() {
-        let chunk_sizes = [dim.0 / (1 << i), dim.1 / (1 << i)];
+        let chunk_sizes = [
+            dim.0.checked_shr(u32::from(i)).unwrap_or(0),
+            dim.1.checked_shr(u32::from(i)).unwrap_or(0),
+        ];
         if chunk_sizes.contains(&0) {
             continue;
         }
@@ -583,14 +694,15 @@ fn idwt(mut pixel_data: ArrayViewMut2<i32>, stages: u8) {
             .next()
         {
             if let Some(subband) = subband.axis_chunks_iter_mut(Axis(1), chunk_sizes[1]).next() {
-                idwt_53_nd(subband, &[Axis(0), Axis(1)]);
+                idwt_53_nd(subband, &[Axis(0), Axis(1)])?;
             } else {
-                return;
+                return Ok(());
             }
         } else {
-            return;
+            return Ok(());
         }
     }
+    Ok(())
 }
 
 fn to_bitplanes(
@@ -623,11 +735,7 @@ fn from_bitplanes<
 fn to_bitplane(pixel_data: &ArrayView2<i32>, current_bit: u8) -> impl Iterator<Item = bool> {
     pixel_data
         .into_iter()
-        .map(move |&x| (x.unsigned_abs() & (1_u32 << current_bit)) != 0)
-}
-
-fn to_signplane(pixel_data: &ArrayView2<i32>) -> impl Iterator<Item = bool> {
-    pixel_data.into_iter().map(|&x| x < 0)
+        .map(move |&x| x.unsigned_abs() & 1_u32.unbounded_shl(u32::from(current_bit)) != 0)
 }
 
 fn from_bitplane<I: Iterator<Item = binrw::io::Result<bool>>>(
@@ -635,14 +743,20 @@ fn from_bitplane<I: Iterator<Item = binrw::io::Result<bool>>>(
     current_bit: u8,
     pixel_data: ArrayViewMut2<i32>,
 ) -> binrw::io::Result<()> {
+    let mask = 1_i32.checked_shl(u32::from(current_bit)).ok_or_else(|| {
+        binrw::io::Error::new(binrw::io::ErrorKind::InvalidData, "invalid MQ00 bit index")
+    })?;
     for (pixel, bit) in pixel_data.into_iter().zip(bits) {
-        let bit = bit?;
-        if bit {
-            *pixel |= 1 << current_bit;
+        if bit? {
+            *pixel |= mask;
         }
     }
 
     Ok(())
+}
+
+fn to_signplane(pixel_data: &ArrayView2<i32>) -> impl Iterator<Item = bool> {
+    pixel_data.into_iter().map(|&x| x < 0)
 }
 
 fn from_signplane<I: Iterator<Item = binrw::io::Result<bool>>>(
@@ -652,7 +766,12 @@ fn from_signplane<I: Iterator<Item = binrw::io::Result<bool>>>(
     for (pixel, bit) in pixel_data.into_iter().zip(bits) {
         let bit = bit?;
         if bit {
-            *pixel = -*pixel;
+            *pixel = pixel.checked_neg().ok_or_else(|| {
+                binrw::io::Error::new(
+                    binrw::io::ErrorKind::InvalidData,
+                    "invalid MQ00 signed coefficient",
+                )
+            })?;
         }
     }
 

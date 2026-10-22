@@ -33,7 +33,13 @@ impl<'a, W> CrcWriter<'a, W> {
 impl<W: Write> Write for CrcWriter<'_, W> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         let written = self.inner.write(buf)?;
-        self.hasher.update(&buf[..written]);
+        let written_buf = buf.get(..written).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "writer reported an invalid byte count",
+            )
+        })?;
+        self.hasher.update(written_buf);
         Ok(written)
     }
 
@@ -78,7 +84,13 @@ impl<'a, R> CrcReader<'a, R> {
 impl<R: Read> Read for CrcReader<'_, R> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let read = self.inner.read(buf)?;
-        self.hasher.update(&buf[..read]);
+        let read_buf = buf.get(..read).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "reader reported an invalid byte count",
+            )
+        })?;
+        self.hasher.update(read_buf);
         Ok(read)
     }
 }

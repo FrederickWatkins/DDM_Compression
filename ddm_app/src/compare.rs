@@ -74,10 +74,18 @@ pub fn compare<const WIDTH: usize, const HEIGHT: usize>(
         thread_id = ?thread_id::get(),
         "Started comparing frames"
     );
-    let mut total_frames = 0;
+    let mut total_frames = 0_usize;
     let start_time = reference.start_time().max(comparison.start_time());
-    let end_time = (reference.num_timestamps() + reference.start_time())
-        .min(comparison.num_timestamps() + comparison.start_time());
+    let reference_end = reference
+        .start_time()
+        .checked_add(reference.num_timestamps())?;
+    let comparison_end = comparison
+        .start_time()
+        .checked_add(comparison.num_timestamps())?;
+    let end_time = reference_end.min(comparison_end).checked_sub(1)?;
+    if end_time < start_time {
+        return None;
+    }
     let mut results = vec![];
     for gps_seconds in start_time..=end_time {
         for channel in 0..16 {
@@ -86,7 +94,7 @@ pub fn compare<const WIDTH: usize, const HEIGHT: usize>(
                 reference.get((channel, gps_seconds)),
                 comparison.get((channel, gps_seconds)),
             ) {
-                total_frames += 1;
+                total_frames = total_frames.saturating_add(1);
                 results.push(compare_frames(reference_frame, comparison_frame));
             }
         }
@@ -128,6 +136,6 @@ pub fn compare_frames<const WIDTH: usize, const HEIGHT: usize>(
         reason = "The fixed frame dimensions are used as a floating point pixel count"
     )]
     ComparisonResult {
-        mse: squared_error / (WIDTH * HEIGHT) as f64,
+        mse: squared_error / (WIDTH as f64).mul_add(HEIGHT as f64, 0.0),
     }
 }

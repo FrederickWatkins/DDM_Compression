@@ -57,7 +57,7 @@
 //! // Encoded size: 26
 //! // Compression ratio: 2.77
 //! ```
-use binrw::io::Result;
+use binrw::io::{Error, ErrorKind, Result};
 use bitstream_io::{BitRead, BitWrite};
 
 /// LPS ranges depending on context/encoder state
@@ -203,18 +203,37 @@ impl<W: BitWrite> CabacEncoder<W> {
     /// Passes along any I/O error from the underlying stream.
     pub fn encode_decision(&mut self, bin_val: bool, ctx: &mut CabacContext) -> Result<()> {
         let q_cod_i_range_idx = (self.cod_i_range >> 6) & 3;
-        let cod_i_range_lps =
-            u16::from(RANGE_TAB_LPS[ctx.p_state_idx as usize][q_cod_i_range_idx as usize]);
-        self.cod_i_range -= cod_i_range_lps;
+        let cod_i_range_lps = u16::from(
+            RANGE_TAB_LPS
+                .get(usize::from(ctx.p_state_idx))
+                .and_then(|row| row.get(usize::from(q_cod_i_range_idx)))
+                .copied()
+                .ok_or_else(|| Error::new(ErrorKind::InvalidData, "invalid CABAC context state"))?,
+        );
+        self.cod_i_range = self
+            .cod_i_range
+            .checked_sub(cod_i_range_lps)
+            .ok_or_else(|| Error::new(ErrorKind::InvalidData, "invalid CABAC encoder range"))?;
         if bin_val == ctx.mps {
-            ctx.p_state_idx = TRANS_IDX_MPS[ctx.p_state_idx as usize];
+            ctx.p_state_idx = TRANS_IDX_MPS
+                .get(usize::from(ctx.p_state_idx))
+                .copied()
+                .ok_or_else(|| Error::new(ErrorKind::InvalidData, "invalid CABAC context state"))?;
         } else {
-            self.cod_i_low += self.cod_i_range;
+            self.cod_i_low = self
+                .cod_i_low
+                .checked_add(self.cod_i_range)
+                .ok_or_else(|| {
+                    Error::new(ErrorKind::InvalidData, "invalid CABAC encoder low value")
+                })?;
             self.cod_i_range = cod_i_range_lps;
             if ctx.p_state_idx == 0 {
                 ctx.mps = !ctx.mps;
             }
-            ctx.p_state_idx = TRANS_IDX_LPS[ctx.p_state_idx as usize];
+            ctx.p_state_idx = TRANS_IDX_LPS
+                .get(usize::from(ctx.p_state_idx))
+                .copied()
+                .ok_or_else(|| Error::new(ErrorKind::InvalidData, "invalid CABAC context state"))?;
         }
         self.renorm_e()?;
         Ok(())
@@ -245,11 +264,17 @@ impl<W: BitWrite> CabacEncoder<W> {
             if self.cod_i_low < 256 {
                 self.put_bit(false)?;
             } else if self.cod_i_low >= 512 {
-                self.cod_i_low -= 512;
+                self.cod_i_low = self.cod_i_low.checked_sub(512).ok_or_else(|| {
+                    Error::new(ErrorKind::InvalidData, "invalid CABAC encoder low value")
+                })?;
                 self.put_bit(true)?;
             } else {
-                self.cod_i_low -= 256;
-                self.bits_outstanding += 1;
+                self.cod_i_low = self.cod_i_low.checked_sub(256).ok_or_else(|| {
+                    Error::new(ErrorKind::InvalidData, "invalid CABAC encoder low value")
+                })?;
+                self.bits_outstanding = self.bits_outstanding.checked_add(1).ok_or_else(|| {
+                    Error::new(ErrorKind::InvalidData, "too many outstanding CABAC bits")
+                })?;
             }
             self.cod_i_range <<= 1;
             self.cod_i_low <<= 1;
@@ -269,7 +294,12 @@ impl<W: BitWrite> CabacEncoder<W> {
         }
         while self.bits_outstanding > 0 {
             self.writer.write_bit(!bit)?;
-            self.bits_outstanding -= 1;
+            self.bits_outstanding = self.bits_outstanding.checked_sub(1).ok_or_else(|| {
+                Error::new(
+                    ErrorKind::InvalidData,
+                    "invalid CABAC outstanding bit count",
+                )
+            })?;
         }
         Ok(())
     }
@@ -312,20 +342,37 @@ impl<R: BitRead> CabacDecoder<R> {
     /// Passes along any I/O error from the underlying stream.
     pub fn decode_decision(&mut self, ctx: &mut CabacContext) -> Result<bool> {
         let q_cod_i_range_idx = (self.cod_i_range >> 6) & 3;
-        let cod_i_range_lps = RANGE_TAB_LPS[ctx.p_state_idx as usize][q_cod_i_range_idx as usize];
+        let cod_i_range_lps = *RANGE_TAB_LPS
+            .get(usize::from(ctx.p_state_idx))
+            .and_then(|row| row.get(usize::from(q_cod_i_range_idx)))
+            .ok_or_else(|| Error::new(ErrorKind::InvalidData, "invalid CABAC context state"))?;
         let bin_val;
-        self.cod_i_range -= u16::from(cod_i_range_lps);
+        self.cod_i_range = self
+            .cod_i_range
+            .checked_sub(u16::from(cod_i_range_lps))
+            .ok_or_else(|| Error::new(ErrorKind::InvalidData, "invalid CABAC decoder range"))?;
         if self.cod_i_offset < self.cod_i_range {
             bin_val = ctx.mps;
-            ctx.p_state_idx = TRANS_IDX_MPS[ctx.p_state_idx as usize];
+            ctx.p_state_idx = TRANS_IDX_MPS
+                .get(usize::from(ctx.p_state_idx))
+                .copied()
+                .ok_or_else(|| Error::new(ErrorKind::InvalidData, "invalid CABAC context state"))?;
         } else {
             bin_val = !ctx.mps;
-            self.cod_i_offset -= self.cod_i_range;
+            self.cod_i_offset =
+                self.cod_i_offset
+                    .checked_sub(self.cod_i_range)
+                    .ok_or_else(|| {
+                        Error::new(ErrorKind::InvalidData, "invalid CABAC decoder offset")
+                    })?;
             self.cod_i_range = u16::from(cod_i_range_lps);
             if ctx.p_state_idx == 0 {
                 ctx.mps = !ctx.mps;
             }
-            ctx.p_state_idx = TRANS_IDX_LPS[ctx.p_state_idx as usize];
+            ctx.p_state_idx = TRANS_IDX_LPS
+                .get(usize::from(ctx.p_state_idx))
+                .copied()
+                .ok_or_else(|| Error::new(ErrorKind::InvalidData, "invalid CABAC context state"))?;
         }
         self.renorm_d()?;
         Ok(bin_val)
@@ -364,7 +411,7 @@ mod tests {
             // Encode each bit of every u64 (from MSB to LSB)
             for &x in &data {
                 for bit_idx in 0..64 {
-                    let bit = (x & (1 << (63 - bit_idx))) != 0;
+                    let bit = (x & (1_u64 << 63_u32.saturating_sub(bit_idx))) != 0;
                     encoder.encode_decision(bit, &mut ctx)?;
                 }
             }
@@ -385,7 +432,7 @@ mod tests {
                 for bit_idx in 0..64 {
                     let bit = decoder.decode_decision(&mut ctx)?;
                     if bit {
-                        *x |= 1 << (63 - bit_idx);
+                        *x |= 1_u64 << 63_u32.saturating_sub(bit_idx);
                     }
                 }
             }

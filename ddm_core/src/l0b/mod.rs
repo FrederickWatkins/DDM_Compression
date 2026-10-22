@@ -15,6 +15,9 @@ pub use mt00::MT00Packet;
 #[non_exhaustive]
 /// Error during encoding or decoding
 pub enum EncodingError {
+    /// Wavelet transform rejected its input or encountered coefficient overflow.
+    #[error(transparent)]
+    Wavelet(#[from] crate::coding::wavelet::WaveletError),
     /// CRCs don't match
     #[error("encoded CRC {encoded_crc} doesn't match calculated crc {calculated_crc}")]
     CrcMismatch {
@@ -198,21 +201,21 @@ impl<const WIDTH: usize, const HEIGHT: usize> proptest::arbitrary::Arbitrary
     fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
         use proptest::prelude::*;
 
-        #[expect(clippy::expect_used, reason = "Calculation guarantees same size")]
         (any::<DDMFrameMetadata>())
             .prop_flat_map(|metadata| {
                 (
                     Just(metadata),
-                    proptest::collection::vec(any::<u16>(), WIDTH * HEIGHT),
+                    proptest::collection::vec(any::<u16>(), WIDTH.saturating_mul(HEIGHT)),
                 )
             })
-            .prop_map(|(metadata, pixels)| {
-                Self::new(
-                    metadata,
+            .prop_filter_map(
+                "frame dimensions must be representable",
+                |(metadata, pixels)| {
                     Array2::from_shape_vec((HEIGHT, WIDTH), pixels)
-                        .expect("pixel count matches array dimensions"),
-                )
-            })
+                        .ok()
+                        .map(|pixel_data| Self::new(metadata, pixel_data))
+                },
+            )
             .boxed()
     }
 }

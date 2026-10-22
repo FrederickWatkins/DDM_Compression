@@ -1,5 +1,4 @@
-use std::collections::VecDeque;
-use std::sync::mpsc;
+use std::{collections::VecDeque, sync::mpsc};
 
 use tracing::trace;
 
@@ -64,9 +63,10 @@ pub fn fanout<T: Clone, I: PipelineInput<Item = T>, O: PipelineOutput<Item = T>>
         "Started fanout to {} outputs",
         outputs.len()
     );
-    let mut total_packets = 0;
+    let mut total_packets = 0_usize;
     while let Some(item) = input.recv() {
-        total_packets += 1;
+        total_packets = total_packets
+            .saturating_add(1);
         let Some((last, preceding)) = outputs.split_last_mut() else {
             continue;
         };

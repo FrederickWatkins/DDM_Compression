@@ -174,11 +174,24 @@ impl<const WIDTH: usize, const HEIGHT: usize> BinRead for MP00Packet<WIDTH, HEIG
         }
 
         // Align the complete packet after its CRC.
-        let bytes_with_crc = (end_pos - start_pos) + 4;
+        let bytes_with_crc = end_pos
+            .checked_sub(start_pos)
+            .and_then(|bytes| bytes.checked_add(4))
+            .ok_or_else(|| binrw::Error::Custom {
+                pos: end_pos,
+                err: Box::new(binrw::io::Error::new(
+                    binrw::io::ErrorKind::InvalidData,
+                    "invalid MP00 packet position",
+                )),
+            })?;
         if !bytes_with_crc.is_multiple_of(4) {
-            let target_distance = 4 - (bytes_with_crc % 4);
-            #[expect(clippy::cast_possible_wrap, reason = "Target distance max value is 3")]
-            reader.seek_relative(target_distance as i64)?;
+            let target_distance = match bytes_with_crc % 4 {
+                1 => 3_i64,
+                2 => 2,
+                3 => 1,
+                _ => 0,
+            };
+            reader.seek_relative(target_distance)?;
         }
 
         Ok(Self { header, pixel_data })
@@ -209,15 +222,26 @@ impl<const WIDTH: usize, const HEIGHT: usize> BinWrite for MP00Packet<WIDTH, HEI
         crc.write_options(writer, Little, args)?;
 
         // Align the complete packet after its CRC.
-        let bytes_encoded = end_pos - start_pos;
-        let bytes_with_crc = bytes_encoded + 4;
+        let bytes_with_crc = end_pos
+            .checked_sub(start_pos)
+            .and_then(|bytes| bytes.checked_add(4))
+            .ok_or_else(|| binrw::Error::Custom {
+                pos: end_pos,
+                err: Box::new(binrw::io::Error::new(
+                    binrw::io::ErrorKind::InvalidData,
+                    "invalid MP00 packet position",
+                )),
+            })?;
         if !bytes_with_crc.is_multiple_of(4) {
-            let target_distance = 4 - (bytes_with_crc % 4);
-            #[expect(
-                clippy::cast_possible_truncation,
-                reason = "Target distance max value is 3"
-            )]
-            writer.write_all(&[0u8; 3][..target_distance as usize])?;
+            let target_distance = match bytes_with_crc % 4 {
+                1 => 3,
+                2 => 2,
+                3 => 1,
+                _ => 0,
+            };
+            for _ in 0..target_distance {
+                writer.write_all(&[0])?;
+            }
         }
         Ok(())
     }
@@ -240,19 +264,21 @@ impl<const WIDTH: usize, const HEIGHT: usize> proptest::arbitrary::Arbitrary
 
     fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
         use proptest::prelude::*;
-        #[expect(clippy::expect_used, reason = "Calculation guarantees same size")]
         (any::<MP00Header>())
             .prop_flat_map(|header| {
                 (
                     Just(header),
-                    proptest::collection::vec(any::<u16>(), WIDTH * HEIGHT),
+                    proptest::collection::vec(any::<u16>(), WIDTH.saturating_mul(HEIGHT)),
                 )
             })
-            .prop_map(|(header, pixels)| Self {
-                header,
-                pixel_data: Array2::from_shape_vec((HEIGHT, WIDTH), pixels)
-                    .expect("pixel count matches array dimensions"),
-            })
+            .prop_filter_map(
+                "frame dimensions must be representable",
+                |(header, pixels)| {
+                    Array2::from_shape_vec((HEIGHT, WIDTH), pixels)
+                        .ok()
+                        .map(|pixel_data| Self { header, pixel_data })
+                },
+            )
             .boxed()
     }
 }
@@ -271,7 +297,7 @@ where
     let mut prev_pixel = 0u16;
     for pixel in &mut output {
         let delta_value = decode_vrq(reader)?;
-        *pixel = prev_pixel.overflowing_add(delta_value.cast_unsigned()).0;
+        *pixel = prev_pixel.wrapping_add(delta_value.cast_unsigned());
         prev_pixel = *pixel;
     }
     Ok(output)
@@ -286,7 +312,7 @@ fn encode_pixel_data<W: Write>(
 ) -> Result<(), binrw::io::Error> {
     let mut prev_pixel = 0u16;
     for pixel in pixel_data {
-        let delta_value: i16 = pixel.overflowing_sub(prev_pixel).0.cast_signed();
+        let delta_value: i16 = pixel.wrapping_sub(prev_pixel).cast_signed();
         encode_vrq(writer, delta_value)?;
         prev_pixel = *pixel;
     }
@@ -305,12 +331,12 @@ fn decode_vrq<R: Read>(reader: &mut R) -> Result<i16, binrw::io::Error> {
         if bytes[1] >> 7 == 1 {
             reader.read_exact(&mut bytes[2..3])?;
             // Pass width 16 for 3-byte i16 values
-            Ok(sign_extend(&bytes[..3], 16))
+            sign_extend(bytes.get(..3).ok_or_else(invalid_vrq_width)?, 16)
         } else {
-            Ok(sign_extend(&bytes[..2], 14))
+            sign_extend(bytes.get(..2).ok_or_else(invalid_vrq_width)?, 14)
         }
     } else {
-        Ok(sign_extend(&bytes[..1], 7))
+        sign_extend(bytes.get(..1).ok_or_else(invalid_vrq_width)?, 7)
     }
 }
 
@@ -318,39 +344,60 @@ fn decode_vrq<R: Read>(reader: &mut R) -> Result<i16, binrw::io::Error> {
 ///
 /// Returns number of bytes written
 fn encode_vrq<W: Write>(writer: &mut W, val: i16) -> Result<(), binrw::io::Error> {
-    #![allow(clippy::unwrap_used, reason = "Guaranteed to fit by &")]
     if (-64..=63).contains(&val) {
-        let b0 = u8::try_from(val.cast_unsigned() & 0x7F).unwrap();
+        let b0 = encode_vrq_byte(u32::from(val.cast_unsigned() & 0x7F))?;
         writer.write_all(&[b0])?;
         Ok(())
     } else if (-8192..=8191).contains(&val) {
-        let u = val.cast_unsigned();
-        let b0 = u8::try_from(u & 0x7F).unwrap() | 0x80;
-        let b1 = u8::try_from((u >> 7) & 0x7F).unwrap();
+        let u = u32::from(val.cast_unsigned());
+        let b0 = encode_vrq_byte(u & 0x7F)? | 0x80;
+        let b1 = encode_vrq_byte((u >> 7) & 0x7F)?;
         writer.write_all(&[b0, b1])?;
         Ok(())
     } else {
         let u = u32::from(val.cast_unsigned());
-        let b0 = u8::try_from(u & 0x7F).unwrap() | 0x80;
-        let b1 = u8::try_from((u >> 7) & 0x7F).unwrap() | 0x80;
-        let b2 = u8::try_from(u >> 14).unwrap() & 0x7F;
+        let b0 = encode_vrq_byte(u & 0x7F)? | 0x80;
+        let b1 = encode_vrq_byte((u >> 7) & 0x7F)? | 0x80;
+        let b2 = encode_vrq_byte(u >> 14)? & 0x7F;
         writer.write_all(&[b0, b1, b2])?;
         Ok(())
     }
 }
 
+fn encode_vrq_byte(value: u32) -> Result<u8, binrw::io::Error> {
+    u8::try_from(value).map_err(|_| {
+        binrw::io::Error::new(binrw::io::ErrorKind::InvalidData, "VRQ byte exceeds 7 bits")
+    })
+}
+
 /// Sign extend a signed integer of arbitrary width, using only the lower seven bits in each byte
-fn sign_extend(bytes: &[u8], width: usize) -> i16 {
+fn sign_extend(bytes: &[u8], width: usize) -> Result<i16, binrw::io::Error> {
+    let width = u32::try_from(width).map_err(|_| invalid_vrq_width())?;
+    if !(1..=16).contains(&width) || bytes.len() > 3 {
+        return Err(invalid_vrq_width());
+    }
     let mut output = 0i16;
     let num_bytes = bytes.len();
     for (i, byte) in bytes.iter().enumerate().take(num_bytes) {
-        output |= i16::from(byte & 0x7F) << (7 * i);
+        let shift = i
+            .checked_mul(7)
+            .and_then(|shift| u32::try_from(shift).ok())
+            .ok_or_else(invalid_vrq_width)?;
+        let bits = i16::from(byte & 0x7F)
+            .checked_shl(shift)
+            .ok_or_else(invalid_vrq_width)?;
+        output |= bits;
     }
     // Only sign-extend if width is less than 16
-    if width < 16 && (output >> (width - 1)) & 1 == 1 {
-        output |= -1 << width;
+    let sign_bit = width.checked_sub(1).ok_or_else(invalid_vrq_width)?;
+    if width < 16 && output.checked_shr(sign_bit).ok_or_else(invalid_vrq_width)? & 1 == 1 {
+        output |= (-1_i16).checked_shl(width).ok_or_else(invalid_vrq_width)?;
     }
-    output
+    Ok(output)
+}
+
+fn invalid_vrq_width() -> binrw::io::Error {
+    binrw::io::Error::new(binrw::io::ErrorKind::InvalidData, "invalid VRQ value width")
 }
 
 #[cfg(test)]

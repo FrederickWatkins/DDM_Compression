@@ -142,22 +142,14 @@ impl TryInto<L0bFormatConfig> for L0bFormatArgs {
 }
 
 /// Exit using clap error formatting
-/// 
-/// # Panics
-/// Always.
 pub fn exit_clap_error(error: clap::Error) -> ! {
     let mut command = Cli::command();
     command.build();
 
-    #[expect(
-        clippy::expect_used,
-        reason = "Can't recover from error during error handler"
-    )]
-    let convert_command = command
-        .find_subcommand_mut("convert")
-        .expect("convert subcommand exists");
-
-    error.format(convert_command).exit()
+    if let Some(convert_command) = command.find_subcommand_mut("convert") {
+        error.format(convert_command).exit();
+    }
+    error.exit()
 }
 
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

@@ -30,7 +30,7 @@ where
         thread_id = ?thread_id::get(),
         "Started reading packets"
     );
-    let mut total_packets = 0;
+    let mut total_packets = 0_usize;
     loop {
         let start_pos = reader.stream_position()?;
         match T::read(reader) {
@@ -57,7 +57,7 @@ where
             )]
             progress.set(position.min(usize::MAX as u64) as usize);
         }
-        total_packets += 1;
+        total_packets = total_packets.saturating_add(1);
     }
 }
 
@@ -78,11 +78,11 @@ where
         thread_id = ?thread_id::get(),
         "Started writing packets"
     );
-    let mut total_packets = 0;
+    let mut total_packets = 0_usize;
     let input = PipelineInputIter::new(input);
     for packet in input {
         progress.inc();
-        total_packets += 1;
+        total_packets = total_packets.saturating_add(1);
         packet.write(writer)?;
     }
     debug!(
@@ -111,22 +111,22 @@ pub fn decode<
         thread_id = ?thread_id::get(),
         "Started decoding frames"
     );
-    let mut total_packets = 0;
-    let mut total_frames = 0;
+    let mut total_packets = 0_usize;
+    let mut total_frames = 0_usize;
     let input = PipelineInputIter::new(input);
     let mut mp00_decoder = MP00Decoder::new();
     let mut mq00_decoder = MQ00Decoder::new();
     let mut prev_format = None;
     let mut warning_emitted = false;
     for packet in input {
-        total_packets += 1;
+        total_packets = total_packets.saturating_add(1);
         progress.inc();
         let (current_format, frame) = match packet {
             L0bPacket::MP00(mp00_packet) => (L0bFormat::MP00, mp00_decoder.decode(mp00_packet)?),
             L0bPacket::MQ00(mq00_packet) => (L0bFormat::MQ00, mq00_decoder.decode(mq00_packet)?),
             L0bPacket::MT00(..) => continue,
         };
-        total_frames += 1;
+        total_frames = total_frames.saturating_add(1);
         if let Some(prev_format) = prev_format
             && current_format != prev_format
             && !warning_emitted
@@ -170,10 +170,10 @@ where
         thread_id = ?thread_id::get(),
         "Started encoding frames"
     );
-    let mut total_frames = 0;
+    let mut total_frames = 0_usize;
     let input = PipelineInputIter::new(input);
     for frame in input {
-        total_frames += 1;
+        total_frames = total_frames.saturating_add(1);
         progress.inc();
         let packet = encoder.encode(frame)?;
         output.send(packet.into())?;

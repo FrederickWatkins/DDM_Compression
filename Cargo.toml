@@ -9,7 +9,7 @@ package.license = "MIT"
 opt-level = 3
 lto = "fat"
 panic = "abort"
-strip = true
+debug = true
 
 [profile.bench]
 opt-level = 3
@@ -33,7 +33,6 @@ unreachable = "deny"
 unimplemented = "deny"
 get_unwrap = "deny"
 panic_in_result_fn = "deny"
-arithmetic_side_effects = "warn"
 allow_attributes_without_reason = "warn"
 needless_pass_by_value = "warn"
 manual_let_else = "warn"

@@ -22,7 +22,7 @@ struct InspectionTask {
 }
 
 /// View metadata and content
-/// 
+///
 /// # Errors
 /// If any of the files don't exist or don't contain valid L0b data
 pub fn inspect<I: IntoIterator<Item = impl AsRef<Path>>, P>(
@@ -43,7 +43,11 @@ where
             let reader = BufReader::new(File::open(path)?);
             ddm_app::inspect_l0b::<WIDTH, HEIGHT, _>(reader, &mut file_progress)
         });
-        tasks.push(InspectionTask { name, size, inspection });
+        tasks.push(InspectionTask {
+            name,
+            size,
+            inspection,
+        });
     }
 
     let file_info = tasks

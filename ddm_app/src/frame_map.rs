@@ -79,7 +79,7 @@ impl<const WIDTH: usize, const HEIGHT: usize> FromIterator<DDMFrame<WIDTH, HEIGH
             thread_id = ?thread_id::get(),
             "Started gathering frame stream into frame map"
         );
-        let mut total_frames = 0;
+        let mut total_frames = 0_usize;
         let mut start_time = u32::MAX;
         let mut end_time = u32::MIN;
         let mut channels_set = HashSet::new();
@@ -88,30 +88,30 @@ impl<const WIDTH: usize, const HEIGHT: usize> FromIterator<DDMFrame<WIDTH, HEIGH
             .inspect(|frame| {
                 start_time = start_time.min(frame.metadata().gps_seconds());
                 end_time = end_time.max(frame.metadata().gps_seconds());
-                channels_set.insert(frame.metadata().channel());
+                let channel = frame.metadata().channel();
+                if usize::from(channel) < 16 {
+                    channels_set.insert(channel);
+                } else {
+                    warn!(channel, "Dropping frame with invalid channel number");
+                }
             })
             .collect();
         if input.is_empty() {
-            return Self {
-                channels: [None; 16],
-                start_time: 0,
-                num_timestamps: 0,
-                frames: Array2::from_elem([0, 0], None),
-            };
+            return Self::default();
         }
-        let num_timestamps = end_time - start_time + 1;
-        let mut channels = [None; 16];
-        let mut physical_channel_num = 0_u8;
-        let mut logical_channel_num = 0_u8;
-        while usize::from(logical_channel_num) < channels.len() {
-            let logical_index = usize::from(logical_channel_num);
-            if channels_set.contains(&logical_channel_num) {
-                channels[logical_index] = Some(physical_channel_num);
-                physical_channel_num += 1;
-            }
-            logical_channel_num += 1;
-        }
-        let frames = Array2::from_elem([channels_set.len(), num_timestamps as usize], None);
+        let Some(num_timestamps) = end_time
+            .checked_sub(start_time)
+            .and_then(|difference| difference.checked_add(1))
+        else {
+            warn!("Frame timestamp range cannot be represented");
+            return Self::default();
+        };
+        let channels = physical_channels(&channels_set);
+        let Ok(num_timestamps_usize) = usize::try_from(num_timestamps) else {
+            warn!("Frame timestamp count cannot be represented on this platform");
+            return Self::default();
+        };
+        let frames = Array2::from_elem([channels_set.len(), num_timestamps_usize], None);
         let mut output = Self {
             channels,
             start_time,
@@ -119,16 +119,21 @@ impl<const WIDTH: usize, const HEIGHT: usize> FromIterator<DDMFrame<WIDTH, HEIGH
             frames,
         };
         for frame in input {
-            total_frames += 1;
+            total_frames = total_frames.saturating_add(1);
             let channel = frame.metadata().channel();
             let gps_seconds = frame.metadata().gps_seconds();
-            if output[(channel, gps_seconds)].is_some() {
+            if output
+                .get((channel, gps_seconds))
+                .is_some_and(Option::is_some)
+            {
                 warn!(
                     thread_id = ?thread_id::get(),
                     "Frame stream contains duplicated frame at channel: {channel} gps_seconds {gps_seconds}"
                 );
             }
-            output[(channel, gps_seconds)] = Some(frame);
+            if let Some(slot) = output.get_mut((channel, gps_seconds)) {
+                *slot = Some(frame);
+            }
         }
         debug!(
             thread_id = ?thread_id::get(),
@@ -136,6 +141,21 @@ impl<const WIDTH: usize, const HEIGHT: usize> FromIterator<DDMFrame<WIDTH, HEIGH
         );
         output
     }
+}
+
+fn physical_channels(channels_set: &HashSet<u8>) -> [Option<u8>; 16] {
+    let mut channels = [None; 16];
+    let mut physical_channel = 0_u8;
+    for (logical_index, slot) in channels.iter_mut().enumerate() {
+        let Ok(logical_channel) = u8::try_from(logical_index) else {
+            continue;
+        };
+        if channels_set.contains(&logical_channel) {
+            *slot = Some(physical_channel);
+            physical_channel = physical_channel.saturating_add(1);
+        }
+    }
+    channels
 }
 
 impl<'a, const WIDTH: usize, const HEIGHT: usize> IntoIterator for &'a DDMFrameMap<WIDTH, HEIGHT> {
@@ -166,5 +186,16 @@ impl<const WIDTH: usize, const HEIGHT: usize> IndexMut<(u8, u32)> for DDMFrameMa
             reason = "Mutable indexing follows the standard collection panic contract"
         )]
         self.get_mut(index).expect("index should be legal")
+    }
+}
+
+impl<const WIDTH: usize, const HEIGHT: usize> Default for DDMFrameMap<WIDTH, HEIGHT> {
+    fn default() -> Self {
+        Self {
+            channels: [None; 16],
+            start_time: 0,
+            num_timestamps: 0,
+            frames: Array2::from_elem([0, 0], None),
+        }
     }
 }

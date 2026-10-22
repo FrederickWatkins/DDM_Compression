@@ -96,14 +96,14 @@ pub fn filter<
         thread_id = ?thread_id::get(),
         "Started filtering frames"
     );
-    let mut total_frames = 0;
-    let mut kept_frames = 0;
+    let mut total_frames = 0_usize;
+    let mut kept_frames = 0_usize;
     let input = PipelineInputIter::new(input);
     for frame in input {
-        total_frames += 1;
+        total_frames = total_frames.saturating_add(1);
         progress.inc();
         if filter.contains(&frame.metadata()) {
-            kept_frames += 1;
+            kept_frames = kept_frames.saturating_add(1);
             output.send(frame)?;
         }
     }

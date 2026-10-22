@@ -50,7 +50,7 @@ fn mp00_mq00_round_trip() -> Result<()> {
         packet.write(&mut cursor)?;
     }
 
-    assert_eq!(l0b_data, buf);
+    anyhow::ensure!(l0b_data == buf, "L0b round trip changed the encoded data");
 
     Ok(())
 }
