@@ -9,13 +9,13 @@ use clap::{
 use ddm_app::{DDMFilters, L0bFormat, L0bFormatConfig};
 use prodash::Root as _;
 use tracing::level_filters::LevelFilter;
-use tracing_subscriber::fmt::format::FmtSpan;
 
-use crate::convert::convert;
+use crate::{compare::compare, convert::convert};
 
 mod convert;
 mod inspect;
 mod table;
+mod compare;
 
 const WIDTH: usize = 20;
 const HEIGHT: usize = 52;
@@ -184,6 +184,7 @@ fn main() -> anyhow::Result<()> {
         .compact()
         .with_target(true)
         .with_file(false)
+        .with_thread_ids(true)
         .init();
     let root = prodash::tree::Root::new();
     let mut options = prodash::render::line::Options::default()
@@ -222,7 +223,12 @@ fn main() -> anyhow::Result<()> {
             println!("{output}");
         }
 
-        Subcommands::Compare { .. } => todo!(),
+        Subcommands::Compare { files } => {
+            let mut progress = root.add_child("Compare");
+            let output = compare(files, &mut progress)?;
+            renderer.shutdown_and_wait();
+            println!("{output}");
+        },
     }
     Ok(())
 }

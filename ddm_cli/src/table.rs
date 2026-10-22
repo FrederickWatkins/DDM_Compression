@@ -1,5 +1,4 @@
-use ddm_app::L0bFileInfo;
-
+use ddm_app::{AggregateComparisonResult, L0bFileInfo};
 
 fn add_property_row(
     table: &mut comfy_table::Table,
@@ -86,6 +85,41 @@ pub fn format_file_info(infos: &[(String, L0bFileInfo)]) -> comfy_table::Table {
         &mut table,
         "GPS seconds (inclusive)",
         infos.iter().map(|(_, info)| format_gps_seconds(info)),
+    );
+    table
+}
+
+pub fn format_comparison_info(
+    infos: &[(String, L0bFileInfo, Option<AggregateComparisonResult>)],
+) -> comfy_table::Table {
+    let mut base_info = vec![];
+    let mut comparison_info = vec![];
+    for info in infos {
+        base_info.push((info.0.clone(), info.1.clone()));
+        comparison_info.push(info.2);
+    }
+    let mut table = format_file_info(&base_info);
+    add_property_row(
+        &mut table,
+        "Average error",
+        comparison_info.iter().map(|info| {
+            if let Some(info) = info {
+                format!("{}", info.mean)
+            } else {
+                "-".to_owned()
+            }
+        }),
+    );
+    add_property_row(
+        &mut table,
+        "Worst case error",
+        comparison_info.iter().map(|info| {
+            if let Some(info) = info {
+                format!("{}", info.worst_case)
+            } else {
+                "-".to_owned()
+            }
+        }),
     );
     table
 }

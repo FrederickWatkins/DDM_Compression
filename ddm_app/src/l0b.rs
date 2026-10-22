@@ -19,6 +19,7 @@ impl Display for L0bFormat {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 /// Summary of an L0b file.
 pub struct L0bFileInfo {
     /// Number of L0b packets

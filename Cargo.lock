@@ -1034,6 +1034,7 @@ dependencies = [
  "ddm_core",
  "human_format",
  "prodash",
+ "thread-id",
  "tracing",
  "tracing-subscriber",
 ]

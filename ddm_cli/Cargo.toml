@@ -19,6 +19,7 @@ prodash = { version = "31", features = [
 ] }
 human_format = "1"
 comfy-table = "8"
+thread-id = "5.1.0"
 
 [lints]
 workspace = true
