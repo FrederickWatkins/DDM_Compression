@@ -1,0 +1,100 @@
+import { DdmGrid } from "components/ddm-grid.slint";
+import { FileInfo } from "components/file-info.slint";
+import { PlaybackControls } from "components/playback-controls.slint";
+import { Button, ComboBox } from "std-widgets.slint";
+
+export component AppWindow inherits Window {
+    title: "DDM Workbench";
+    width: 1200px;
+    height: 800px;
+
+    in property <[string]> files: [];
+    in property <int> active-file-index: -1;
+    in property <[image]> frame-images: [];
+    in property <bool> has-frames: false;
+    in property <bool> is-playing: false;
+    in property <float> playback-speed: 30;
+    in property <string> playback-speed-label;
+    in property <int> timestamp-count: 1;
+    in property <int> timestamp-index: 0;
+    in property <string> timestamp-label;
+    in property <int> selected-channel: -1;
+    in property <string> file-name;
+    in property <string> packet-summary;
+    in property <string> format-summary;
+    in property <string> channel-summary;
+    in property <string> timestamp-summary;
+    in property <string> status-message;
+
+    callback open-file-requested();
+    callback file-selected(int);
+    callback playback-toggled();
+    callback playback-speed-changed(float);
+    callback timestamp-changed(float);
+    callback channel-changed(int);
+
+    VerticalLayout {
+        HorizontalLayout {
+            Button {
+                text: "Open L0b files";
+                clicked => { root.open-file-requested(); }
+            }
+
+            file-selector := ComboBox {
+                model: root.files;
+                current-index: root.active-file-index;
+                selected(value) => {
+                    root.file-selected(file-selector.current-index);
+                }
+            }
+        }
+
+        HorizontalLayout {
+            FileInfo {
+                preferred-width: 280px;
+                vertical-stretch: 1;
+                file-name: root.file-name;
+                packet-summary: root.packet-summary;
+                format-summary: root.format-summary;
+                channel-summary: root.channel-summary;
+                timestamp-summary: root.timestamp-summary;
+            }
+
+            VerticalLayout {
+                horizontal-stretch: 1;
+
+                PlaybackControls {
+                    has-frames: root.has-frames;
+                    is-playing: root.is-playing;
+                    playback-speed: root.playback-speed;
+                    playback-speed-label: root.playback-speed-label;
+                    timestamp-count: root.timestamp-count;
+                    timestamp-index: root.timestamp-index;
+                    timestamp-label: root.timestamp-label;
+                    channel-index: root.selected-channel;
+                    playback-toggled => { root.playback-toggled(); }
+                    playback-speed-changed(speed) => {
+                        root.playback-speed-changed(speed);
+                    }
+                    timestamp-changed(value) => {
+                        root.timestamp-changed(value);
+                    }
+                    channel-changed(channel) => {
+                        root.channel-changed(channel);
+                    }
+                }
+
+                DdmGrid {
+                    frame-images: root.frame-images;
+                    selected-channel: root.selected-channel;
+                    horizontal-stretch: 1;
+                    vertical-stretch: 1;
+                }
+            }
+        }
+
+        Text {
+            text: root.status-message;
+        }
+    }
+}

@@ -1,0 +1,37 @@
+import { DdmFrame } from "ddm-frame.slint";
+
+export component DdmGrid inherits GridLayout {
+    in property <[image]> frame-images;
+    in property <int> selected-channel: -1;
+
+    if root.selected-channel < 0: GridLayout {
+        Row {
+            DdmFrame { source: root.frame-images[0]; }
+            DdmFrame { source: root.frame-images[1]; }
+            DdmFrame { source: root.frame-images[2]; }
+            DdmFrame { source: root.frame-images[3]; }
+        }
+        Row {
+            DdmFrame { source: root.frame-images[4]; }
+            DdmFrame { source: root.frame-images[5]; }
+            DdmFrame { source: root.frame-images[6]; }
+            DdmFrame { source: root.frame-images[7]; }
+        }
+        Row {
+            DdmFrame { source: root.frame-images[8]; }
+            DdmFrame { source: root.frame-images[9]; }
+            DdmFrame { source: root.frame-images[10]; }
+            DdmFrame { source: root.frame-images[11]; }
+        }
+        Row {
+            DdmFrame { source: root.frame-images[12]; }
+            DdmFrame { source: root.frame-images[13]; }
+            DdmFrame { source: root.frame-images[14]; }
+            DdmFrame { source: root.frame-images[15]; }
+        }
+    }
+
+    if root.selected-channel >= 0: DdmFrame {
+        source: root.frame-images[root.selected-channel];
+    }
+}

@@ -1,50 +1,50 @@
-//! File subsystem
-use std::{fs::File, io::BufReader, sync::Arc};
+use std::{
+    fs::File,
+    io::BufReader,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
-use anyhow::anyhow;
-use prodash::NestedProgress;
-use rfd::AsyncFileDialog;
-use tokio::task::{JoinHandle, spawn_blocking};
+use anyhow::{Context, Result};
+use ddm_app::L0bFileData;
+use prodash::progress::Discard;
 
-use crate::L0bFileData;
+pub(crate) const FRAME_WIDTH: usize = 20;
+pub(crate) const FRAME_HEIGHT: usize = 52;
+pub(crate) const CHANNEL_COUNT: u8 = 16;
 
-/// Possible file types to select
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub enum FileType {
-    /// Raw L0b data
-    L0b,
+pub(crate) struct LoadedFile {
+    pub(crate) name: String,
+    pub(crate) data: Arc<L0bFileData<FRAME_WIDTH, FRAME_HEIGHT>>,
 }
 
-/// Possible data types to load
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DataType {
-    /// Loaded and mapped L0b data
-    L0b(Arc<L0bFileData>),
-}
-
-/// Load L0b data
-/// 
-/// # Errors
-/// Errors if any of the underlying processes error
-#[tracing::instrument(skip_all, level = "trace")]
-pub async fn load_l0b<P>(
-    progress: &mut P
-) -> anyhow::Result<impl Iterator<Item = anyhow::Result<JoinHandle<anyhow::Result<(String, L0bFileData)>>>>>
-where P: NestedProgress, P::SubProgress: 'static {
-    let files = AsyncFileDialog::new()
-        .add_filter("L0b", &["l0b.ddm"])
-        .add_filter("*", &["*"])
-        .set_title("Open L0b file")
+pub(crate) async fn choose_l0b_files() -> Option<Vec<PathBuf>> {
+    rfd::AsyncFileDialog::new()
+        .add_filter("L0b DDM files", &["l0b.ddm"])
+        .set_title("Open L0b files")
         .pick_files()
-        .await;
-    let Some(paths) = files else {
-        return Err(anyhow!("No file selected"));
-    };
+        .await
+        .map(|files| {
+            files
+                .into_iter()
+                .map(|file| file.path().to_path_buf())
+                .collect()
+        })
+}
 
-    Ok(paths.into_iter().map(|path| {
-        let file_name = path.file_name();
-        let mut bar = progress.add_child(format!("load {file_name}"));
-        let reader = BufReader::new(File::open(path.path())?);
-        Ok(spawn_blocking(move || Ok((file_name, ddm_app::load_l0b(reader, &mut bar)?))))
-    }))
+pub(crate) fn load_l0b_file(path: &Path) -> Result<LoadedFile> {
+    let name = path.file_name().map_or_else(
+        || path.display().to_string(),
+        |name| name.to_string_lossy().into_owned(),
+    );
+    let file = File::open(path).with_context(|| format!("Could not open {}", path.display()))?;
+    let mut progress = Discard;
+    let data =
+        ddm_app::load_l0b::<FRAME_WIDTH, FRAME_HEIGHT, _>(BufReader::new(file), &mut progress)
+            .with_context(|| format!("Could not decode {}", path.display()))?;
+
+    Ok(LoadedFile {
+        name,
+        data: Arc::new(data),
+    })
 }

@@ -1,0 +1,60 @@
+import { Button, ComboBox, Slider } from "std-widgets.slint";
+
+export component PlaybackControls inherits VerticalLayout {
+    in property <bool> has-frames;
+    in property <bool> is-playing;
+    in property <float> playback-speed;
+    in property <string> playback-speed-label;
+    in property <int> timestamp-count;
+    in property <int> timestamp-index;
+    in property <string> timestamp-label;
+    in property <int> channel-index;
+
+    callback playback-toggled();
+    callback playback-speed-changed(float);
+    callback timestamp-changed(float);
+    callback channel-changed(int);
+
+    HorizontalLayout {
+        Button {
+            text: root.is-playing ? "Pause" : "Play";
+            enabled: root.has-frames && root.timestamp-count > 1;
+            clicked => { root.playback-toggled(); }
+        }
+
+        channel-selector := ComboBox {
+            model: [
+                "All channels",
+                "Channel 0", "Channel 1", "Channel 2", "Channel 3",
+                "Channel 4", "Channel 5", "Channel 6", "Channel 7",
+                "Channel 8", "Channel 9", "Channel 10", "Channel 11",
+                "Channel 12", "Channel 13", "Channel 14", "Channel 15"
+            ];
+            current-index: root.channel-index + 1;
+            enabled: root.has-frames;
+            selected(value) => {
+                root.channel-changed(channel-selector.current-index - 1);
+            }
+        }
+    }
+
+    Text { text: root.timestamp-label; }
+
+    Slider {
+        enabled: root.has-frames;
+        minimum: 0;
+        maximum: root.timestamp-count > 1 ? root.timestamp-count - 1 : 1;
+        value: root.timestamp-index;
+        changed(value) => { root.timestamp-changed(value); }
+    }
+
+    Text { text: root.playback-speed-label; }
+
+    Slider {
+        enabled: root.has-frames;
+        minimum: 1;
+        maximum: 60;
+        value: root.playback-speed;
+        changed(value) => { root.playback-speed-changed(value); }
+    }
+}
