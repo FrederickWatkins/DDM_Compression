@@ -8,11 +8,14 @@ package.license = "MIT"
 opt-level = 3
 lto = "fat"
 panic = "abort"
-debug = true
+strip = true
 
 [profile.bench]
 opt-level = 3
 lto = "fat"
+
+[profile.dev.package."*"]
+opt-level = 3
 
 [workspace.lints.rust]
 unused_qualifications = "warn"

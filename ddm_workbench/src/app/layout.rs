@@ -1,23 +1,16 @@
+//! Application main window layout
 use std::fmt::Display;
 
 use iced::{
     Alignment, Element, Font, Length, widget::{column, container, row, space, svg, text},
 };
 
-use crate::{L, M, S, app::Message, ui::widget::title_bar::title_bar};
+use crate::{L, S, app::Message, ui::widget::title_bar};
+use crate::app::style::bar_style;
 
 const LOGO: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/logo.svg"));
 
-fn bar_style(theme: &iced::Theme) -> container::Style {
-    let colour = theme.extended_palette().secondary.weak;
-
-    container::Style {
-        background: Some(colour.color.into()),
-        text_color: Some(colour.text),
-        ..Default::default()
-    }
-}
-
+/// Layout main window
 pub fn layout<'a>(
     window_title: impl Display,
     menu_bar: impl Into<Element<'a, Message>>,
@@ -40,8 +33,8 @@ pub fn layout<'a>(
         container(text(window_title.to_string()).font(Font::MONOSPACE)).padding(S),
         space(),
         Message::DragWindow,
-        Message::Minimize,
-        Message::Maximize,
+        Message::MinimizeWindow,
+        Message::MaximizeWindow,
         Message::CloseWindow,
     )).style(bar_style);
     let status_bar = container(status_bar).height(Length::Fixed(L)).width(Length::Fill).style(bar_style).align_y(Alignment::Center);

@@ -1,9 +1,10 @@
+//! Title bar for window
 use iced::{
     Alignment, Element, Length,
-    widget::{button, container, mouse_area, row, space, stack, svg, text},
+    widget::{container, mouse_area, row, space, stack, svg},
 };
 
-use crate::{L, M, S, XL, ui::widget::buttons::circular_button};
+use crate::{L, S, ui::widget::buttons::circular_button};
 
 const MINIMIZE_ICON: &[u8] = br##"
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
@@ -28,6 +29,7 @@ const CLOSE_ICON: &[u8] = br##"
 </svg>
 "##;
 
+/// Title bar for window
 pub fn title_bar<'a, Message: Clone + 'a>(
     left_content: impl Into<Element<'a, Message>>,
     center_content: impl Into<Element<'a, Message>>,

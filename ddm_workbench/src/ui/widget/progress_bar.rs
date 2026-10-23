@@ -1,7 +1,9 @@
+//! Progress bar
 use iced::{Element, Length, alignment::Vertical, Font, widget::{self, row, space, text}};
 
 use crate::{M, S, XL, XS};
 
+/// Progress bar
 pub fn progress_bar<'a, Message: 'a>(name: String, fraction: f32) -> Element<'a, Message> {
     row![
         space().width(XS),

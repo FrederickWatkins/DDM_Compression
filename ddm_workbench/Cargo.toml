@@ -8,16 +8,14 @@ license.workspace = true
 [dependencies]
 anyhow = "1"
 ddm_app = { path = "../ddm_app", features = ["tokio"] }
+ddm_core = { path = "../ddm_core" }
 directories = "6"
-iced = { version = "0.14", features = ["svg", "tokio"] }
+iced = { version = "0.14", features = ["svg", "tokio", "image"] }
 iced_aw = "0.14"
+ndarray = "0.17.2"
 plotters = "0.3"
 plotters-iced2 = "0.14"
-prodash = { version = "31.0.1", features = [
-    "render-line",
-    "render-line-crossterm",
-    "render-line-autoconfigure",
-] }
+prodash = { version = "31", default-features = false}
 rfd = "0.17"
 slotmap = "1"
 tokio = { version = "1", features = ["rt"] }
@@ -25,5 +23,36 @@ tracing = "0.1"
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-[lints]
-workspace = true
+[lints.rust]
+unused_qualifications = "warn"
+missing_docs = "warn"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+suspicious = { level = "warn", priority = -1 }
+
+must_use_candidate = "allow"
+unwrap_used = "deny"
+expect_used = "deny"
+todo = "deny"
+panic = "deny"
+unreachable = "deny"
+unimplemented = "deny"
+get_unwrap = "deny"
+panic_in_result_fn = "deny"
+allow_attributes_without_reason = "warn"
+needless_pass_by_value = "warn"
+manual_let_else = "warn"
+enum_glob_use = "warn"
+allow_attributes = "warn"
+use_self = "warn"
+new_without_default = "allow"
+return_self_not_must_use = "allow"
+similar_names = "allow"
+indexing_slicing = "allow"
+string_slice = "deny"
+cast_precision_loss = "allow"
+too_many_lines = "allow"
+
+
