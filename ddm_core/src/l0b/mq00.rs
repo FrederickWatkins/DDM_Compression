@@ -583,7 +583,10 @@ impl<const WIDTH: usize, const HEIGHT: usize> BinWrite for MQ00Packet<WIDTH, HEI
                 clippy::cast_possible_truncation,
                 reason = "Target distance max value is 3"
             )]
-            #[expect(clippy::indexing_slicing, reason = "target distance is less than three")]
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "target distance is less than three"
+            )]
             writer.write_all(&[0u8; 3][..target_distance as usize])?;
         }
 

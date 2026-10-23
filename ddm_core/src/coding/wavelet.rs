@@ -2,7 +2,7 @@
 //!
 //! Based on mathematical definition in DOI: 10.1109/PACRIM.2001.953547
 #[cfg(not(feature = "std"))]
-use alloc::{vec::Vec};
+use alloc::vec::Vec;
 use core::result::Result;
 
 use ndarray::{ArrayViewMut, ArrayViewMut1, Axis, Dimension};

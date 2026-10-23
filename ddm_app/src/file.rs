@@ -17,6 +17,7 @@ use crate::{DDMFilters, DDMFrameMap, L0bFileInfo, L0bFormatConfig, PipelineChann
 const PIPELINE_CAPACITY: usize = 100;
 
 /// An L0b file's metadata and decoded frame map.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct L0bFileData<const WIDTH: usize, const HEIGHT: usize> {
     /// Metadata collected from the file's packets.
     pub info: L0bFileInfo,

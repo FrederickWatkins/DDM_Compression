@@ -11,6 +11,7 @@ use tracing::{debug, warn};
 use crate::pipeline::{PipelineInput, PipelineInputIter};
 
 /// Frames mapped into contiguous structure in memory, indexable by channel and timestamp
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DDMFrameMap<const WIDTH: usize, const HEIGHT: usize> {
     channels: [Option<u8>; 16],
     start_time: u32,

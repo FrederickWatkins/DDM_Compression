@@ -6,14 +6,24 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+anyhow = "1"
+ddm_app = { path = "../ddm_app", features = ["tokio"] }
 directories = "6"
 iced = { version = "0.14", features = ["svg", "tokio"] }
 iced_aw = "0.14"
 plotters = "0.3"
 plotters-iced2 = "0.14"
-tokio = "1.54"
+prodash = { version = "31.0.1", features = [
+    "render-line",
+    "render-line-crossterm",
+    "render-line-autoconfigure",
+] }
+rfd = "0.17"
+slotmap = "1"
+tokio = { version = "1", features = ["rt"] }
+tracing = "0.1"
 tracing-appender = "0.2"
-tracing-subscriber = "0.3"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [lints]
 workspace = true

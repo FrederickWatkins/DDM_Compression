@@ -65,8 +65,7 @@ pub fn fanout<T: Clone, I: PipelineInput<Item = T>, O: PipelineOutput<Item = T>>
     );
     let mut total_packets = 0_usize;
     while let Some(item) = input.recv() {
-        total_packets = total_packets
-            .saturating_add(1);
+        total_packets = total_packets.saturating_add(1);
         let Some((last, preceding)) = outputs.split_last_mut() else {
             continue;
         };
