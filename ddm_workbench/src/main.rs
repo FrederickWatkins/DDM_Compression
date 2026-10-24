@@ -1,16 +1,22 @@
 //! DDM GUI built with Dioxus
-use components::{Hero, PlayButton};
-use dioxus::prelude::*;
+use std::{io::BufReader, sync::Arc};
 
-use crate::components::{WindowDecorations, WindowMenu, WindowMenuItem};
+use ddm_app::load_l0b;
+use dioxus::prelude::*;
 
 /// Define a components module that contains all shared components for our app.
 mod components;
+use components::window_decorations::WindowDecorations;
+
+use crate::components::ddm_player::DDMPlayer;
 
 // The asset macro also minifies some assets like CSS and JS to make bundled smaller
 const MAIN_CSS: Asset = asset!("/assets/styling/main.css");
 const TAILWIND_CSS: Asset = asset!("/assets/tailwind.css");
-const THEMES_CSS: Asset = asset!("/assets/themes.css");
+const DDM_WIDTH: usize = 20;
+const DDM_HEIGHT: usize = 52;
+
+type L0bFileData = ddm_app::L0bFileData<DDM_WIDTH, DDM_HEIGHT>;
 
 fn main() {
     LaunchBuilder::desktop()
@@ -28,50 +34,37 @@ fn main() {
 /// Main app view
 #[component]
 fn App() -> Element {
-    let mut show_open_dialog = use_signal(|| false);
+    let current_theme = use_signal(|| "dark".to_string());
+    let reader = BufReader::new(std::fs::File::open("../data/HG1_TEST_512.l0b.ddm").unwrap());
+    let file = Arc::new(load_l0b(reader, &mut prodash::progress::Discard).unwrap());
+
+    use_effect(move || {
+        let theme = current_theme();
+        let script = format!(
+            "document.documentElement.setAttribute('data-theme', '{}');",
+            theme
+        );
+
+        spawn(async move {
+            let _ = document::eval(&script).await;
+        });
+    });
 
     rsx! {
+        document::Link {
+            rel: "stylesheet",
+            href: asset!("/assets/dx-components-theme.css"),
+        }
         Stylesheet { href: TAILWIND_CSS }
-        Stylesheet { href: THEMES_CSS }
         Stylesheet { href: MAIN_CSS }
 
         div {
-            class: "flex min-h-screen flex-col bg-app-bg text-app-text",
+            style: "width: 100%; height: 100%;",
 
-            WindowDecorations {
-                title: "DDM Workbench".to_string(),
+            WindowDecorations {}
 
-                WindowMenu {
-                    label: "File".to_string(),
-
-                    WindowMenuItem {
-                        label: "Open…".to_string(),
-                        on_select: move |_| show_open_dialog.set(true),
-                    }
-
-                    WindowMenuItem {
-                        label: "Close".to_string(),
-                        on_select: move |_| {},
-                    }
-                }
-
-                WindowMenu {
-                    label: "View".to_string(),
-
-                    WindowMenuItem {
-                        label: "Reset layout".to_string(),
-                        on_select: move |_| {},
-                    }
-                }
-            }
-
-            main {
-                class: "min-w-0 flex-1 p-6",
-
-                h1 {
-                    class: "text-2xl font-bold text-app-primary",
-                    "Dashboard"
-                }
+            div {
+                DDMPlayer { file }
             }
         }
     }

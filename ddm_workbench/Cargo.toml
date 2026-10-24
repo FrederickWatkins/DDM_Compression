@@ -8,11 +8,19 @@ license.workspace = true
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
-[lints]
-workspace = true
+[lints.rust]
+dead_code = "allow"
 
 [dependencies]
 dioxus = { version = "0.7.1", features = [] }
+dioxus-icons = { version = "0.1.0", default-features = false }
+dioxus-primitives = { git = "https://github.com/DioxusLabs/components", version = "0.0.1", default-features = false }
+slotmap = "1"
+tracing = { version = "0.1" }
+rfd = "0.17"
+tokio = { version = "1", features = ["rt"] }
+ddm_app = {path = "../ddm_app"}
+prodash = { version = "31" }
 
 [features]
 default = ["desktop"]

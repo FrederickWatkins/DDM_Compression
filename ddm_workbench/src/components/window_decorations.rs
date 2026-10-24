@@ -1,210 +1,143 @@
-
 use dioxus::prelude::*;
 
+use crate::components::menubar::{
+    Menubar, MenubarContent, MenubarItem, MenubarMenu, MenubarTrigger,
+};
+
+const LOGO: Asset = asset!("/assets/logo.svg");
+const MINIMIZE: Asset = asset!("/assets/icons/minimize.svg");
+const RESTORE_DOWN: Asset = asset!("/assets/icons/restore-down.svg");
+const MAXIMIZE: Asset = asset!("/assets/icons/maximize.svg");
+const CLOSE: Asset = asset!("/assets/icons/close.svg");
+
 #[component]
-pub fn WindowDecorations(title: String, children: Element) -> Element {
+pub fn WindowDecorations() -> Element {
     let window = dioxus::desktop::use_window();
-    let maximized = use_signal(|| window.is_maximized());
+    let mut is_maximized = use_signal(|| window.is_maximized());
 
-    let drag_window = window.clone();
-    let double_click_window = window.clone();
-    let minimize_window = window.clone();
-    let maximize_window = window.clone();
-    let close_window = window.clone();
+    let on_minimize = {
+        let window = window.clone();
+        move |_| window.set_minimized(true)
+    };
 
-    let mut maximized_on_double_click = maximized;
-    let mut maximized_on_button = maximized;
+    let on_toggle_maximize = {
+        let window = window.clone();
+
+        move |_| {
+            let maximized = !is_maximized();
+            window.set_maximized(maximized);
+            is_maximized.set(maximized);
+        }
+    };
+
+    let on_close = {
+        let window = window.clone();
+        move |_| window.close()
+    };
+
+    let on_drag = move |_| window.drag();
 
     rsx! {
-        header {
-            class: "relative z-50 flex h-10 w-full select-none items-stretch \
-                    border-b border-app-text/10 bg-app-surface text-app-text",
+        div { class: "top-bar",
 
-            // Application menu bar
-            nav {
-                class: "flex shrink-0 items-center gap-1 px-2",
-                {children}
-            }
+            div { class: "top-bar-left-content",
 
-            // Draggable title area
-            div {
-                class: "flex min-w-0 flex-1 cursor-default items-center justify-center",
-                onmousedown: move |_| drag_window.drag(),
-                ondblclick: move |_| {
-                    double_click_window.toggle_maximized();
-                    maximized_on_double_click
-                        .set(!maximized_on_double_click());
-                },
+                img { src: LOGO, width: 26, height: 26 }
 
-                span {
-                    class: "pointer-events-none truncate px-4 text-sm \
-                            font-medium text-app-text/70",
-                    "{title}"
-                }
-            }
-
-            // Native-style window controls
-            div {
-                class: "flex shrink-0 items-stretch border-l border-app-text/10",
-
-                // Minimize
-                button {
-                    r#type: "button",
-                    class: "flex w-11 items-center justify-center \
-                            transition-colors hover:bg-app-text/10 \
-                            focus-visible:outline-none \
-                            focus-visible:ring-2 \
-                            focus-visible:ring-inset \
-                            focus-visible:ring-app-primary",
-                    title: "Minimize",
-                    "aria-label": "Minimize window",
-                    onclick: move |_| minimize_window.set_minimized(true),
-
-                    svg {
-                        class: "h-4 w-4",
-                        view_box: "0 0 24 24",
-                        fill: "none",
-                        stroke: "currentColor",
-                        stroke_width: "1.5",
-                        stroke_linecap: "round",
-                        path { d: "M5 12h14" }
-                    }
-                }
-
-                // Maximize / restore
-                button {
-                    r#type: "button",
-                    class: "flex w-11 items-center justify-center \
-                            transition-colors hover:bg-app-text/10 \
-                            focus-visible:outline-none \
-                            focus-visible:ring-2 \
-                            focus-visible:ring-inset \
-                            focus-visible:ring-app-primary",
-                    title: if maximized() { "Restore" } else { "Maximize" },
-                    "aria-label": if maximized() {
-                        "Restore window"
-                    } else {
-                        "Maximize window"
-                    },
-                    onclick: move |_| {
-                        maximize_window.toggle_maximized();
-                        maximized_on_button.set(!maximized_on_button());
-                    },
-
-                    if maximized() {
-                        svg {
-                            class: "h-4 w-4",
-                            view_box: "0 0 24 24",
-                            fill: "none",
-                            stroke: "currentColor",
-                            stroke_width: "1.5",
-                            stroke_linejoin: "round",
-                            path {
-                                d: "M8 8V5a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1h-3"
+                Menubar {
+                    MenubarMenu { index: 0usize,
+                        MenubarTrigger { "File" }
+                        MenubarContent {
+                            MenubarItem {
+                                index: 0usize,
+                                value: "open".to_string(),
+                                on_select: move |value| {
+                                    info!("Selected value: {}", value);
+                                },
+                                "Open"
                             }
-                            rect {
-                                x: "4",
-                                y: "8",
-                                width: "12",
-                                height: "12",
-                                rx: "1"
+                            MenubarItem {
+                                index: 1usize,
+                                value: "export".to_string(),
+                                on_select: move |value| {
+                                    info!("Selected value: {}", value);
+                                },
+                                "Save"
                             }
                         }
-                    } else {
-                        svg {
-                            class: "h-4 w-4",
-                            view_box: "0 0 24 24",
-                            fill: "none",
-                            stroke: "currentColor",
-                            stroke_width: "1.5",
-                            rect {
-                                x: "5",
-                                y: "5",
-                                width: "14",
-                                height: "14",
-                                rx: "1"
+                    }
+
+                    MenubarMenu { index: 1usize,
+                        MenubarTrigger { "Run" }
+                        MenubarContent {
+                            MenubarItem {
+                                index: 0usize,
+                                value: "benchmark".to_string(),
+                                on_select: move |value| {
+                                    info!("Selected value: {}", value);
+                                },
+                                "Benchmark"
                             }
                         }
                     }
                 }
+            }
 
-                // Close
-                button {
-                    r#type: "button",
-                    class: "flex w-11 items-center justify-center \
-                            transition-colors hover:bg-app-text/10 \
-                            focus-visible:outline-none \
-                            focus-visible:ring-2 \
-                            focus-visible:ring-inset \
-                            focus-visible:ring-app-primary",
-                    title: "Close",
-                    "aria-label": "Close window",
-                    onclick: move |_| close_window.close(),
+            div { class: "top-bar-title", "DDM Workbench" }
 
-                    svg {
-                        class: "h-4 w-4",
-                        view_box: "0 0 24 24",
-                        fill: "none",
-                        stroke: "currentColor",
-                        stroke_width: "1.5",
-                        stroke_linecap: "round",
-                        path { d: "M6 6l12 12M18 6L6 18" }
-                    }
-                }
+            // Only this empty region initiates a window drag.
+            div { class: "top-bar-drag-region", onmousedown: on_drag }
+
+            TopBarButtons {
+                on_minimize,
+                on_toggle_maximize,
+                is_maximized,
+                on_close,
             }
         }
     }
 }
 
-/// A dropdown menu in the custom title bar.
 #[component]
-pub fn WindowMenu(label: String, children: Element) -> Element {
-    let mut open = use_signal(|| false);
-
-    rsx! {
-        div {
-            class: "relative flex h-full items-center",
-
-            button {
-                r#type: "button",
-                class: "h-full rounded-sm px-3 text-sm \
-                        transition-colors hover:bg-app-text/10 \
-                        focus-visible:outline-none \
-                        focus-visible:ring-2 \
-                        focus-visible:ring-app-primary",
-                onclick: move |_| open.set(!open()),
-                "aria-expanded": "{open}",
-                "{label}"
-            }
-
-            if open() {
-                div {
-                    class: "absolute left-0 top-full z-50 min-w-44 \
-                            rounded-md border border-app-text/10 \
-                            bg-app-surface py-1 text-sm shadow-xl",
-                    onclick: move |_| open.set(false),
-                    {children}
-                }
-            }
-        }
-    }
-}
-
-/// A clickable item inside a [`WindowMenu`].
-#[component]
-pub fn WindowMenuItem(
-    label: String,
-    on_select: EventHandler<()>,
+fn TopBarButtons(
+    on_minimize: EventHandler<MouseEvent>,
+    on_toggle_maximize: EventHandler<MouseEvent>,
+    is_maximized: ReadSignal<bool>,
+    on_close: EventHandler<MouseEvent>,
 ) -> Element {
     rsx! {
-        button {
-            r#type: "button",
-            class: "flex w-full items-center px-3 py-1.5 text-left \
-                    hover:bg-app-text/10 \
-                    focus-visible:outline-none \
-                    focus-visible:bg-app-text/10",
-            onclick: move |_| on_select.call(()),
-            "{label}"
+        div { class: "top-bar-buttons",
+
+            button {
+                class: "top-bar-button",
+                title: "Minimise",
+                aria_label: "Minimise window",
+                onclick: move |event| on_minimize.call(event),
+
+                img { src: MINIMIZE, width: 20, height: 20 }
+            }
+
+            button {
+                class: "top-bar-button",
+                title: if is_maximized() { "Restore" } else { "Maximise" },
+                aria_label: if is_maximized() { "Restore window" } else { "Maximise window" },
+                onclick: move |event| on_toggle_maximize.call(event),
+
+                img {
+                    src: if is_maximized() { RESTORE_DOWN } else { MAXIMIZE },
+                    width: 16,
+                    height: 16,
+                }
+            }
+
+            button {
+                class: "top-bar-button close-button",
+                title: "Close",
+                aria_label: "Close window",
+                onclick: move |event| on_close.call(event),
+
+                img { src: CLOSE, width: 20, height: 20 }
+            }
         }
     }
 }
