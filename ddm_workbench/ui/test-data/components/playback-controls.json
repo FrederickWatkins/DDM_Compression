@@ -1,0 +1,22 @@
+{
+    "state": {
+        "playback-speed": 30.0,
+        "current-timestamp": 158900,
+        "channel": "Channel 4",
+        "all-channels": false,
+        "playing": true
+    },
+    "config": {
+        "start-time": 158400,
+        "end-time": 162700,
+        "available-channels": [
+            "Channel 0",
+            "Channel 1",
+            "Channel 2",
+            "Channel 4",
+            "Channel 8",
+            "Channel 12",
+            "Channel 15"
+        ]
+    }
+}

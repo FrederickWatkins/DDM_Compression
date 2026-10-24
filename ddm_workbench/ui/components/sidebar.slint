@@ -1,0 +1,32 @@
+import { Palette } from "std-widgets.slint";
+
+export component Sidebar inherits Rectangle {
+
+    HorizontalLayout {
+        spacing: 0px;
+
+        @children
+
+        divider := TouchArea {
+            width: 5px;
+            Rectangle {
+                width: 2px;
+                background: divider.has-hover || divider.pressed
+                    ? Palette.accent-foreground
+                    : root.background;
+            }
+
+            mouse-cursor: ew-resize;
+
+            moved => {
+                if (self.pressed) {
+                    root.width = min(
+                    root.max-width,
+                    max(
+                        root.min-width,
+                        root.width + self.mouse-x - self.pressed-x));
+                }
+            }
+        }
+    }
+}

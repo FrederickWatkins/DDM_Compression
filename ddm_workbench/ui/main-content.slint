@@ -1,0 +1,53 @@
+import { DdmPlayer } from "components/ddm-player.slint";
+import { Button } from "std-widgets.slint";
+
+export enum TabKind {
+    ddm-player,
+    compression-inspector
+}
+
+export struct TabInfo {
+    id: int,
+    title: string,
+    kind: TabKind,
+}
+
+export component MainContent inherits Rectangle {
+    in property <[TabInfo]> tabs;
+    in-out property <int> active-tab-index: 0;
+
+    out property <TabInfo> active-tab:
+        root.tabs.length > 0
+            && root.active-tab-index >= 0
+            && root.active-tab-index < root.tabs.length
+        ? root.tabs[root.active-tab-index]
+        : { id: -1, title: "", kind: TabKind.ddm-player };
+
+    VerticalLayout {
+        HorizontalLayout {
+            vertical-stretch: 0;
+
+            for tab[index] in root.tabs: Button {
+                text: tab.title;
+
+                clicked => {
+                    root.active-tab-index = index;
+                }
+            }
+        }
+
+        if root.active-tab-index >= 0
+            && root.active-tab-index < root.tabs.length
+            && root.active-tab.kind == TabKind.ddm-player: DdmPlayer {
+        }
+
+        if root.active-tab-index >= 0
+            && root.active-tab-index < root.tabs.length
+            && root.active-tab.kind == TabKind.compression-inspector: Rectangle {
+            // Replace with your CompressionInspector component.
+            Text {
+                text: "Compression Inspector";
+            }
+        }
+    }
+}

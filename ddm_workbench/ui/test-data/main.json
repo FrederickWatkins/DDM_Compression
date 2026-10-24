@@ -1,0 +1,16 @@
+{
+  "tasks": [
+    {
+      "name": "Loading L0b archive",
+      "progress": 35
+    },
+    {
+      "name": "Encoding frames",
+      "progress": 72
+    },
+    {
+      "name": "Benchmark",
+      "progress": 100
+    }
+  ]
+}

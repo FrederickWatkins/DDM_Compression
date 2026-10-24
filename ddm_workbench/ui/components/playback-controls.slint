@@ -1,60 +1,74 @@
-import { Button, ComboBox, Slider } from "std-widgets.slint";
+import { Slider, Button, ComboBox, Palette } from "std-widgets.slint";
+import { PlayPauseButton } from "play-pause-button.slint";
+import { LabelledBox } from "labelled-box.slint";
 
-export component PlaybackControls inherits VerticalLayout {
-    in property <bool> has-frames;
-    in property <bool> is-playing;
-    in property <float> playback-speed;
-    in property <string> playback-speed-label;
-    in property <int> timestamp-count;
-    in property <int> timestamp-index;
-    in property <string> timestamp-label;
-    in property <int> channel-index;
+export struct PlaybackState {
+    playback-speed: float,
+    current-timestamp: int,
+    channel: string,
+    all-channels: bool,
+    playing: bool,
+}
 
-    callback playback-toggled();
-    callback playback-speed-changed(float);
-    callback timestamp-changed(float);
-    callback channel-changed(int);
+export struct PlaybackConfig {
+    start-time: int,
+    end-time: int,
+    available-channels: [string],
+}
 
-    HorizontalLayout {
-        Button {
-            text: root.is-playing ? "Pause" : "Play";
-            enabled: root.has-frames && root.timestamp-count > 1;
-            clicked => { root.playback-toggled(); }
-        }
+export component PlaybackControls inherits Rectangle {
+    in-out property <PlaybackState> state;
+    in property <PlaybackConfig> config;
+    border-color: Palette.border;
+    border-width: 2px;
+    border-radius: 8px;
 
-        channel-selector := ComboBox {
-            model: [
-                "All channels",
-                "Channel 0", "Channel 1", "Channel 2", "Channel 3",
-                "Channel 4", "Channel 5", "Channel 6", "Channel 7",
-                "Channel 8", "Channel 9", "Channel 10", "Channel 11",
-                "Channel 12", "Channel 13", "Channel 14", "Channel 15"
-            ];
-            current-index: root.channel-index + 1;
-            enabled: root.has-frames;
-            selected(value) => {
-                root.channel-changed(channel-selector.current-index - 1);
+    VerticalLayout {
+        alignment: start;
+        padding: 10px;
+
+        HorizontalLayout {
+            padding: 10px;
+            spacing: 10px;
+            PlayPauseButton {
+                size: 32px;
+            }
+
+            LabelledBox {
+                text: "Channel:";
+                ComboBox {
+                    preferred-width: 200px;
+                    model: config.available-channels;
+                    current-value: state.channel;
+                    enabled: !state.all-channels;
+                }
             }
         }
-    }
 
-    Text { text: root.timestamp-label; }
+        HorizontalLayout {
+            padding: 10px;
 
-    Slider {
-        enabled: root.has-frames;
-        minimum: 0;
-        maximum: root.timestamp-count > 1 ? root.timestamp-count - 1 : 1;
-        value: root.timestamp-index;
-        changed(value) => { root.timestamp-changed(value); }
-    }
+            LabelledBox {
+                text: "Timestamp: " + state.current-timestamp;
+                Slider {
+                    preferred-width: 300px;
+                    minimum: config.start-time;
+                    maximum: config.end-time;
+                    value: state.current-timestamp;
+                }
+            }
 
-    Text { text: root.playback-speed-label; }
+            spacing: 10px;
 
-    Slider {
-        enabled: root.has-frames;
-        minimum: 1;
-        maximum: 60;
-        value: root.playback-speed;
-        changed(value) => { root.playback-speed-changed(value); }
+            LabelledBox {
+                text: "Playback speed: " + state.playback-speed + " FPS";
+                Slider {
+                    preferred-width: 200px;
+                    minimum: 1.0;
+                    maximum: 60.0;
+                    value: state.playback-speed;
+                }
+            }
+        }
     }
 }

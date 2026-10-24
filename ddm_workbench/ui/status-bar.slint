@@ -1,0 +1,17 @@
+import { Palette } from "std-widgets.slint";
+import { TaskInfo, ProgressBar } from "components/progress-bar.slint";
+export component StatusBar inherits Rectangle {
+    background: Palette.alternate-background;
+    vertical-stretch: 0;
+    preferred-height: 25px;
+
+    in property <[TaskInfo]> tasks;
+
+    HorizontalLayout {
+        alignment: start;
+
+        for task in tasks: ProgressBar {
+            task: task;
+        }
+    }
+}
