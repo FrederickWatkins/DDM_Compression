@@ -1,14 +1,53 @@
 [workspace]
+members = [
+    "ddm_app",
+    "ddm_cli",
+    "ddm_core",
+    "ddm_workbench", "ddm_workbench",
+]
 resolver = "3"
-members = ["ddm_app", "ddm_cli","ddm_core", "ddm_workbench"]
-package.rust-version = "1.88.0"
-package.license = "MIT"
 
-[profile.release]
-opt-level = 3
-lto = "fat"
-panic = "abort"
-strip = true
+[workspace.package]
+license = "MIT"
+rust-version = "1.88.0"
+
+[workspace.lints.clippy]
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"
+enum_glob_use = "warn"
+expect_used = "deny"
+get_unwrap = "deny"
+indexing_slicing = "deny"
+manual_let_else = "warn"
+must_use_candidate = "allow"
+needless_pass_by_value = "warn"
+new_without_default = "allow"
+panic = "deny"
+panic_in_result_fn = "deny"
+return_self_not_must_use = "allow"
+similar_names = "allow"
+string_slice = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+unwrap_used = "deny"
+use_self = "warn"
+
+[workspace.lints.clippy.all]
+level = "deny"
+priority = -1
+
+[workspace.lints.clippy.pedantic]
+level = "warn"
+priority = -1
+
+[workspace.lints.clippy.suspicious]
+level = "warn"
+priority = -1
+
+[workspace.lints.rust]
+missing_docs = "warn"
+unused_qualifications = "warn"
 
 [profile.bench]
 opt-level = 3
@@ -17,32 +56,8 @@ lto = "fat"
 [profile.dev.package."*"]
 opt-level = 3
 
-[workspace.lints.rust]
-unused_qualifications = "warn"
-missing_docs = "warn"
-
-[workspace.lints.clippy]
-all = { level = "deny", priority = -1 }
-pedantic = { level = "warn", priority = -1 }
-suspicious = { level = "warn", priority = -1 }
-
-must_use_candidate = "allow"
-unwrap_used = "deny"
-expect_used = "deny"
-todo = "deny"
-panic = "deny"
-unreachable = "deny"
-unimplemented = "deny"
-get_unwrap = "deny"
-panic_in_result_fn = "deny"
-allow_attributes_without_reason = "warn"
-needless_pass_by_value = "warn"
-manual_let_else = "warn"
-enum_glob_use = "warn"
-allow_attributes = "warn"
-use_self = "warn"
-new_without_default = "allow"
-return_self_not_must_use = "allow"
-similar_names = "allow"
-indexing_slicing = "deny"
-string_slice = "deny"
+[profile.release]
+opt-level = 3
+lto = "fat"
+panic = "abort"
+strip = true
