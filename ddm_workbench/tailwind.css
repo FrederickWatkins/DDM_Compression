@@ -1,1 +1,19 @@
 @import "tailwindcss";
+
+@theme {
+  --color-app-base: var(--color-base);
+  --color-app-surface-0: var(--color-surface-0);
+  --color-app-surface-1: var(--color-surface-1);
+  --color-app-surface-2: var(--color-surface-2);
+  --color-app-text-main: var(--color-text-main);
+  --color-app-text-muted: var(--color-text-muted);
+  --color-app-text-subtle: var(--color-text-subtle);
+  --color-app-border-subtle: var(--color-border-subtle);
+  --color-app-border-strong: var(--color-border-strong);
+  --color-app-primary: var(--color-primary);
+  --color-app-primary-hover: var(--color-primary-hover);
+  --color-app-secondary: var(--color-secondary);
+  --color-app-success: var(--color-success);
+  --color-app-warning: var(--color-warning);
+  --color-app-error: var(--color-error);
+}

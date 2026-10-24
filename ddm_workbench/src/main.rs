@@ -1,40 +1,78 @@
-// The dioxus prelude contains a ton of common items used in dioxus apps. It's a good idea to import wherever you
-// need dioxus
+//! DDM GUI built with Dioxus
+use components::{Hero, PlayButton};
 use dioxus::prelude::*;
 
-use components::Hero;
+use crate::components::{WindowDecorations, WindowMenu, WindowMenuItem};
 
 /// Define a components module that contains all shared components for our app.
 mod components;
 
-// We can import assets in dioxus with the `asset!` macro. This macro takes a path to an asset relative to the crate root.
-// The macro returns an `Asset` type that will display as the path to the asset in the browser or a local path in desktop bundles.
-const FAVICON: Asset = asset!("/assets/favicon.ico");
 // The asset macro also minifies some assets like CSS and JS to make bundled smaller
 const MAIN_CSS: Asset = asset!("/assets/styling/main.css");
 const TAILWIND_CSS: Asset = asset!("/assets/tailwind.css");
+const THEMES_CSS: Asset = asset!("/assets/themes.css");
 
 fn main() {
-    // The `launch` function is the main entry point for a dioxus app. It takes a component and renders it with the platform feature
-    // you have enabled
-    dioxus::launch(App);
+    LaunchBuilder::desktop()
+        .with_cfg(
+            dioxus::desktop::Config::new().with_window(
+                dioxus::desktop::WindowBuilder::new()
+                    .with_title("My Themed App")
+                    .with_inner_size(dioxus::desktop::LogicalSize::new(900.0, 600.0))
+                    .with_decorations(false),
+            ),
+        )
+        .launch(App);
 }
 
-/// App is the main component of our app. Components are the building blocks of dioxus apps. Each component is a function
-/// that takes some props and returns an Element. In this case, App takes no props because it is the root of our app.
-///
-/// Components should be annotated with `#[component]` to support props, better error messages, and autocomplete
+/// Main app view
 #[component]
 fn App() -> Element {
-    // The `rsx!` macro lets us define HTML inside of rust. It expands to an Element with all of our HTML inside.
+    let mut show_open_dialog = use_signal(|| false);
+
     rsx! {
-        // In addition to element and text (which we will see later), rsx can contain other components. In this case,
-        // we are using the `document::Link` component to add a link to our favicon and main CSS file into the head of our app.
-        document::Link { rel: "icon", href: FAVICON }
-        document::Link { rel: "stylesheet", href: MAIN_CSS }
-        document::Link { rel: "stylesheet", href: TAILWIND_CSS }
+        Stylesheet { href: TAILWIND_CSS }
+        Stylesheet { href: THEMES_CSS }
+        Stylesheet { href: MAIN_CSS }
 
-        Hero {}
+        div {
+            class: "flex min-h-screen flex-col bg-app-bg text-app-text",
 
+            WindowDecorations {
+                title: "DDM Workbench".to_string(),
+
+                WindowMenu {
+                    label: "File".to_string(),
+
+                    WindowMenuItem {
+                        label: "Open…".to_string(),
+                        on_select: move |_| show_open_dialog.set(true),
+                    }
+
+                    WindowMenuItem {
+                        label: "Close".to_string(),
+                        on_select: move |_| {},
+                    }
+                }
+
+                WindowMenu {
+                    label: "View".to_string(),
+
+                    WindowMenuItem {
+                        label: "Reset layout".to_string(),
+                        on_select: move |_| {},
+                    }
+                }
+            }
+
+            main {
+                class: "min-w-0 flex-1 p-6",
+
+                h1 {
+                    class: "text-2xl font-bold text-app-primary",
+                    "Dashboard"
+                }
+            }
+        }
     }
 }
