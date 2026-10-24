@@ -3,7 +3,6 @@ members = [
     "ddm_app",
     "ddm_cli",
     "ddm_core",
-    "ddm_workbench", "ddm_workbench",
 ]
 resolver = "3"
 

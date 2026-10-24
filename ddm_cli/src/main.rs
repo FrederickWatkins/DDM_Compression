@@ -3,12 +3,14 @@
 use clap::Parser as _;
 use ddm_cli::{Cli, Subcommands, compare, convert, exit_clap_error, inspect};
 use prodash::Root as _;
+use color_eyre::eyre::Result;
 
 /// Parse command-line arguments and run the selected command.
 ///
 /// # Errors
 /// Returns errors raised by the selected command.
-pub fn main() -> anyhow::Result<()> {
+pub fn main() -> Result<()> {
+    color_eyre::install()?;
     let args = Cli::parse();
     tracing_subscriber::fmt()
         .with_max_level(args.log_level)
