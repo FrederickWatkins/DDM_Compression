@@ -33,7 +33,9 @@ where
 {
     let input_name = display_file_name(input.as_ref());
     let output_name = display_file_name(output.as_ref());
-    let input_size = std::fs::metadata(input.as_ref()).wrap_err_with(|| format!("Error opening file {}", input.as_ref().display()))?.len();
+    let input_size = std::fs::metadata(input.as_ref())
+        .wrap_err_with(|| format!("Error opening file {}", input.as_ref().display()))?
+        .len();
     let mut conversion_progress =
         progress.add_child(format!("Convert {input_name} into {output_name}"));
     let reader = BufReader::new(File::open(input.as_ref())?);

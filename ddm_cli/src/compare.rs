@@ -46,7 +46,9 @@ where
     for file in files {
         let path: PathBuf = file.as_ref().to_owned();
         let name = display_file_name(&path);
-        let size = std::fs::metadata(&path).wrap_err_with(|| format!("Error opening file {}", path.display()))?.len();
+        let size = std::fs::metadata(&path)
+            .wrap_err_with(|| format!("Error opening file {}", path.display()))?
+            .len();
         let mut file_progress = progress.add_child(&name);
         let loaded = thread::spawn(move || {
             let reader = BufReader::new(File::open(path)?);
@@ -80,9 +82,7 @@ where
     let mut comparisons = Vec::with_capacity(other_tasks.len());
 
     for task in other_tasks {
-        let loaded = map_join_err(task
-            .loaded
-            .join())
+        let loaded = map_join_err(task.loaded.join())
             .wrap_err_with(|| format!("Error loading file {}", task.name))??;
         let mut compare_progress = progress.add_child(format!("Compare {}", task.name));
         compare_progress.init(None, None);
@@ -101,10 +101,7 @@ where
     }
 
     for task in comparisons {
-        let comparison = map_join_err(task
-            .comparison
-            .join())
-            .wrap_err_with(|| "")?;
+        let comparison = map_join_err(task.comparison.join()).wrap_err_with(|| "")?;
         report.push(ComparisonInfoEntry {
             file: task.file,
             comparison,

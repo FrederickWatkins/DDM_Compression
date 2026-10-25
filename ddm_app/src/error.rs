@@ -20,4 +20,3 @@ pub fn downcast_join_err(err: &Box<dyn Any + Send>) -> eyre::Report {
 pub fn map_join_err<T>(res: Result<T, Box<dyn Any + Send>>) -> eyre::Result<T> {
     res.map_err(|e| downcast_join_err(&e))
 }
-

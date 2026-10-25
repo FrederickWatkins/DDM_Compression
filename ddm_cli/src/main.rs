@@ -1,9 +1,9 @@
 //! DDM command-line entry point.
 
 use clap::Parser as _;
+use color_eyre::eyre::Result;
 use ddm_cli::{Cli, Subcommands, compare, convert, exit_clap_error, inspect};
 use prodash::Root as _;
-use color_eyre::eyre::Result;
 
 /// Parse command-line arguments and run the selected command.
 ///
@@ -57,6 +57,19 @@ pub fn main() -> Result<()> {
             let output = compare(files, &mut progress)?;
             renderer.shutdown_and_wait();
             println!("{output}");
+        }
+        Subcommands::Benchmark {
+            input,
+            output,
+            sweep,
+            measurement,
+            config,
+        } => {
+            dbg!(input);
+            dbg!(output);
+            dbg!(sweep);
+            dbg!(measurement);
+            dbg!(config);
         }
     }
     Ok(())

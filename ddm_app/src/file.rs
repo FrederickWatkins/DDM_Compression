@@ -305,16 +305,18 @@ where
         )
     });
 
-    
-        map_join_err(read.join()).wrap_err_with(|| "Error reading file")??;
-        map_join_err(decode.join()).wrap_err_with(|| "Error decoding packets")??;
-        map_join_err(filter.join()).wrap_err_with(|| "Error filtering frames")??;
-        map_join_err(encode.join()).wrap_err_with(|| "Error encoding frames")??;
-        map_join_err(write.join()).wrap_err_with(|| "Error writing file")??;
-        map_join_err(fanout_original.join()).wrap_err_with(|| "Error fanning out original data")??;
-        map_join_err(fanout_converted.join()).wrap_err_with(|| "Error fanning out converted data")??;
-        let source = map_join_err(inspect_original.join()).wrap_err_with(|| "Error inspecting original packets")?;
-        let destination = map_join_err(inspect_converted.join()).wrap_err_with(|| "Error inspecting converted packets")?;
+    map_join_err(read.join()).wrap_err_with(|| "Error reading file")??;
+    map_join_err(decode.join()).wrap_err_with(|| "Error decoding packets")??;
+    map_join_err(filter.join()).wrap_err_with(|| "Error filtering frames")??;
+    map_join_err(encode.join()).wrap_err_with(|| "Error encoding frames")??;
+    map_join_err(write.join()).wrap_err_with(|| "Error writing file")??;
+    map_join_err(fanout_original.join()).wrap_err_with(|| "Error fanning out original data")??;
+    map_join_err(fanout_converted.join())
+        .wrap_err_with(|| "Error fanning out converted data")??;
+    let source = map_join_err(inspect_original.join())
+        .wrap_err_with(|| "Error inspecting original packets")?;
+    let destination = map_join_err(inspect_converted.join())
+        .wrap_err_with(|| "Error inspecting converted packets")?;
 
     file_progress.done("Done".to_owned());
     Ok(L0bConversionResult {

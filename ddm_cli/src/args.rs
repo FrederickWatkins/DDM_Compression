@@ -1,10 +1,11 @@
-use std::path::PathBuf;
+use std::{convert::Infallible, iter::StepBy, ops::RangeInclusive, path::PathBuf, str::FromStr};
 
 use clap::{
     Args, CommandFactory as _, Parser, Subcommand, ValueEnum,
     error::{ContextKind, ContextValue, ErrorKind},
     value_parser,
 };
+use color_eyre::eyre::{self, Context as _};
 use ddm_app::{DDMFilters, L0bFormat, L0bFormatConfig};
 use tracing::level_filters::LevelFilter;
 
@@ -57,13 +58,54 @@ pub enum Subcommands {
         #[arg(required = true, num_args = 2..)]
         files: Vec<PathBuf>,
     },
+    /// Benchmark DDM encoding methods with sweep variables
+    Benchmark {
+        /// .l0b.ddm file to read from
+        #[arg(long, short)]
+        input: PathBuf,
+        /// .csv file to write to
+        #[arg(long, short)]
+        output: PathBuf,
+        /// Sweep variables
+        #[arg(long, short, value_name = "NAME=START-END:STEP")]
+        sweep: Vec<Sweep>,
+        /// Measurement variables
+        #[arg(long, short, required=true, num_args=1..)]
+        measurement: Vec<Measurement>,
+        /// Test configs. Repeat for each config.
+        #[arg(long, short, required=true,
+            allow_hyphen_values = true,
+            value_parser = |s: &str| {
+                BenchmarkL0bFormatArgs::try_parse_from(
+                    std::iter::once(
+                        "benchmark-config".to_owned()
+                    ).chain(s.split_whitespace().map(str::to_owned)),
+                )
+            },
+            long_help = "\
+Test configs. Repeat for each config.
+
+Each configuration is a quoted set of codec arguments:
+
+  --config='--format mp00 --quantisation x'
+  --config='--format mq00 --quantisation x --wavelet-stages 1 --gop-length 1'
+
+Available format arguments:
+  --format <FORMAT>          Format to encode as
+  --quantisation <VALUE>     Quantisation (supports sweep variables)
+  --no-dc-adjust             Disable DC adjustment
+  --wavelet-stages <VALUE>   Number of wavelet stages (MQ00)
+  --gop-length <VALUE>       GOP length (MQ00)",
+)]
+        config: Vec<BenchmarkL0bFormatArgs>,
+    },
 }
 
 #[derive(Debug, Args)]
 #[command(next_help_heading = "Format options")]
 pub struct L0bFormatArgs {
     /// Format to encode as
-    #[arg(long, short = 'f', value_enum, default_value = "mp00")]
+    #[arg(long, short, value_enum, default_value = "mp00")]
     pub format: L0bFormat,
 
     /// Quantisation
@@ -171,4 +213,99 @@ impl From<LogLevel> for LevelFilter {
             LogLevel::Error => Self::ERROR,
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct Sweep {
+    pub name: String,
+    pub range: StepBy<RangeInclusive<i64>>,
+}
+
+impl FromStr for Sweep {
+    type Err = eyre::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut parts = s.split('=');
+        let Some(name) = parts.next().map(ToOwned::to_owned) else {
+            return Err(eyre::eyre!("Empty sweep declaration"));
+        };
+        let Some(mut range_step_parts) = parts.next().map(|s| s.split(':')) else {
+            return Err(eyre::eyre!(
+                "No values present in sweep variable declaration"
+            ));
+        };
+        let Some(range) = range_step_parts.next() else {
+            return Err(eyre::eyre!(
+                "No range present in sweep variable declaration"
+            ));
+        };
+        let mut range_parts = range.split('-');
+        let start = i64::from_str(match range_parts.next() {
+            Some(s) => s,
+            None => {
+                return Err(eyre::eyre!("empty value in sweep variable range"))
+                    .wrap_err_with(|| "error parsing start of range")
+                    .map_err(|e| eyre::eyre!("{e:#}"));
+            }
+        })
+        .wrap_err_with(|| "error parsing start of range")?;
+        let end = i64::from_str(match range_parts.next() {
+            Some(s) => s,
+            None => {
+                return Err(eyre::eyre!("empty value in sweep variable range"))
+                    .wrap_err_with(|| "error parsing start of range")
+                    .map_err(|e| eyre::eyre!("{e:#}"));
+            }
+        })
+        .wrap_err_with(|| "error parsing end of range")?;
+        let step = usize::from_str(range_step_parts.next().unwrap_or("1"))
+            .wrap_err_with(|| "Error parsing step")?;
+        let range = (start..=end).step_by(step);
+        Ok(Self { name, range })
+    }
+}
+
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Measurement {
+    /// File size
+    Size,
+    /// Mean square error
+    Mse,
+    /// Root mean square error
+    Rmse,
+    /// Peak signal-to-noise ratio (calculated based on full 16 bit range)
+    Psnr,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum BenchmarkParameter<T> {
+    Value(T),
+    Variable(String),
+}
+
+impl<T: FromStr> FromStr for BenchmarkParameter<T> {
+    type Err = Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(T::from_str(s)
+            .map(Self::Value)
+            .unwrap_or(Self::Variable(s.to_owned())))
+    }
+}
+
+#[derive(Debug, Clone, Parser)]
+#[command(next_help_heading = "Format options")]
+pub struct BenchmarkL0bFormatArgs {
+    /// Format to encode as
+    #[arg(long, short)]
+    pub format: L0bFormat,
+    /// Quantisation
+    #[arg(long, short)]
+    pub quantisation: BenchmarkParameter<u8>,
+    #[arg(long)]
+    pub no_dc_adjust: bool,
+    #[arg(long)]
+    pub wavelet_stages: Option<BenchmarkParameter<u8>>,
+    #[arg(long)]
+    pub gop_length: Option<BenchmarkParameter<u8>>,
 }

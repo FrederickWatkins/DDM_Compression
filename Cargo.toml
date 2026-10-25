@@ -1,9 +1,5 @@
 [workspace]
-members = [
-    "ddm_app",
-    "ddm_cli",
-    "ddm_core", "ddm_tui",
-]
+members = ["ddm_app", "ddm_cli", "ddm_core"]
 resolver = "3"
 
 [workspace.package]
