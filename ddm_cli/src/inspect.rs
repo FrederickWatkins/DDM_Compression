@@ -6,7 +6,8 @@ use std::{
     thread::{self, JoinHandle},
 };
 
-use ddm_app::L0bFileInfo;
+use color_eyre::eyre::{self, Context};
+use ddm_app::{L0bFileInfo, map_join_err};
 use prodash::NestedProgress;
 
 use crate::{
@@ -18,7 +19,7 @@ use crate::{
 struct InspectionTask {
     name: String,
     size: u64,
-    inspection: JoinHandle<anyhow::Result<L0bFileInfo>>,
+    inspection: JoinHandle<eyre::Result<L0bFileInfo>>,
 }
 
 /// View metadata and content
@@ -28,7 +29,7 @@ struct InspectionTask {
 pub fn inspect<I: IntoIterator<Item = impl AsRef<Path>>, P>(
     input: I,
     progress: &mut P,
-) -> anyhow::Result<impl Display>
+) -> eyre::Result<impl Display>
 where
     P: NestedProgress,
     P::SubProgress: Send + 'static,
@@ -36,7 +37,9 @@ where
     let mut tasks = Vec::new();
     for file in input {
         let path: PathBuf = file.as_ref().to_owned();
-        let size = std::fs::metadata(&path)?.len();
+        let size = std::fs::metadata(&path)
+            .wrap_err_with(|| format!("Error opening file {}", path.display()))?
+            .len();
         let name = display_file_name(&path);
         let mut file_progress = progress.add_child(format!("Inspect {name}"));
         let inspection = thread::spawn(move || {
@@ -49,21 +52,19 @@ where
             inspection,
         });
     }
-
     let file_info = tasks
         .into_iter()
         .map(|task| {
-            let info = task
-                .inspection
-                .join()
-                .map_err(|_| anyhow::anyhow!("Inspection thread panicked"))??;
+            let info = map_join_err(task.inspection.join())
+                .wrap_err_with(|| format!("Error inspecting file {}", task.name))?
+                .wrap_err_with(|| format!("Error inspecting file {}", task.name))?;
             Ok(FileInfoEntry {
                 name: task.name,
                 size: task.size,
                 info,
             })
         })
-        .collect::<Result<Vec<_>, anyhow::Error>>()?;
+        .collect::<Result<Vec<_>, eyre::Error>>()?;
 
     Ok(format_file_info(&file_info))
 }

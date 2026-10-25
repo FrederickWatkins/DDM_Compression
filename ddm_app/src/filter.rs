@@ -1,10 +1,10 @@
 //! DDM frame filters and range parsing.
 use std::{fmt::Display, str::FromStr};
 
-use anyhow::anyhow;
 #[cfg(feature = "clap")]
 use clap::Args;
 use ddm_core::l0b::{DDMFrame, DDMFrameMetadata};
+use eyre::eyre;
 use prodash::Progress;
 use ranges::{Domain, Ranges};
 use tracing::debug;
@@ -15,7 +15,7 @@ use crate::pipeline::{PipelineInput, PipelineInputIter, PipelineOutput};
 ///
 /// # Errors
 /// Returns an error if `input` is not a valid list of values and ranges.
-pub fn parse_ranges<T>(input: &str) -> Result<Ranges<T>, anyhow::Error>
+pub fn parse_ranges<T>(input: &str) -> eyre::Result<Ranges<T>>
 where
     T: Domain + FromStr + Copy,
     <T as FromStr>::Err: Display,
@@ -27,28 +27,28 @@ where
     for part in input.split(',') {
         let part = part.trim();
         if part.is_empty() {
-            return Err(anyhow!("empty entry in range list"));
+            continue;
         }
         if let Some((start, end)) = part.split_once('-') {
             let start = start.trim();
             let end = end.trim();
             if start.is_empty() || end.is_empty() {
-                return Err(anyhow!("invalid range `{part}`; expected START-END"));
+                return Err(eyre!("invalid range `{part}`; expected START-END"));
             }
             let start = start
                 .parse::<T>()
-                .map_err(|e| anyhow!("invalid range start in `{part}`: {e}"))?;
+                .map_err(|e| eyre!("invalid range start in `{part}`: {e}"))?;
             let end = end
                 .parse::<T>()
-                .map_err(|e| anyhow!("invalid range end in `{part}`: {e}"))?;
+                .map_err(|e| eyre!("invalid range end in `{part}`: {e}"))?;
             if start > end {
-                return Err(anyhow!("range start exceeds end in `{part}`"));
+                return Err(eyre!("range start exceeds end in `{part}`"));
             }
             ranges.insert(start..=end);
         } else {
             let value = part
                 .parse::<T>()
-                .map_err(|e| anyhow!("invalid value `{part}`: {e}"))?;
+                .map_err(|e| eyre!("invalid value `{part}`: {e}"))?;
             ranges.insert(value..=value);
         }
     }
@@ -91,7 +91,7 @@ pub fn filter<
     output: &mut O,
     filter: &DDMFilters,
     progress: &mut dyn Progress,
-) -> anyhow::Result<()> {
+) -> eyre::Result<()> {
     debug!(
         thread_id = ?thread_id::get(),
         "Started filtering frames"

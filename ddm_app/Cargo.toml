@@ -21,7 +21,6 @@ ranges = "0.4"
 tracing = "0.1"
 prodash = { version = "31", features = ["unit-bytes", "unit-human"] }
 human_format = "1"
-anyhow = "1"
 ndarray = "0.17"
 tokio = { version = "1", optional = true }
 crossbeam = { version = "0.8", optional = true }
@@ -29,6 +28,7 @@ flume = { version = "0.12", optional = true }
 clap = { version = "4", optional = true }
 thread-id = "5"
 crossbeam-channel = { version = "0.5", optional = true }
+eyre = "0.6"
 
 [dev-dependencies]
 ddm_core = { path = "../ddm_core", features = ["proptest", "serde"] }

@@ -22,7 +22,7 @@ pub fn read<T: BinRead + ReadEndian, R: Read + Seek, O: PipelineOutput<Item = T>
     reader: &mut R,
     output: &mut O,
     progress: &mut dyn Progress,
-) -> anyhow::Result<()>
+) -> eyre::Result<()>
 where
     for<'a> <T as BinRead>::Args<'a>: Default,
 {
@@ -70,7 +70,7 @@ pub fn write<T: BinWrite + WriteEndian, W: Write + Seek, I: PipelineInput<Item =
     writer: &mut W,
     input: &mut I,
     progress: &mut dyn Progress,
-) -> anyhow::Result<()>
+) -> eyre::Result<()>
 where
     for<'a> <T as BinWrite>::Args<'a>: Default,
 {
@@ -106,7 +106,7 @@ pub fn decode<
     input: &mut I,
     output: &mut O,
     progress: &mut dyn Progress,
-) -> anyhow::Result<()> {
+) -> eyre::Result<()> {
     debug!(
         thread_id = ?thread_id::get(),
         "Started decoding frames"
@@ -162,7 +162,7 @@ pub fn encode<
     output: &mut O,
     encoder: &mut E,
     progress: &mut dyn Progress,
-) -> anyhow::Result<()>
+) -> eyre::Result<()>
 where
     E::Packet: Into<L0bPacket<WIDTH, HEIGHT>>,
 {

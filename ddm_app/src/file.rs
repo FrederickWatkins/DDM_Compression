@@ -6,13 +6,17 @@ use std::{
 use ddm_core::l0b::{
     DDMFrame, L0bPacket, MP00Encoder, MP00EncoderConfig, MQ00Encoder, MQ00EncoderConfig,
 };
+use eyre::WrapErr as _;
 use prodash::{
     NestedProgress, Progress,
     progress::Discard,
     unit::{self, Bytes, Human, display::Mode},
 };
 
-use crate::{DDMFilters, DDMFrameMap, L0bFileInfo, L0bFormatConfig, PipelineChannel, fanout};
+use crate::{
+    DDMFilters, DDMFrameMap, L0bFileInfo, L0bFormatConfig, PipelineChannel, error::map_join_err,
+    fanout,
+};
 
 const PIPELINE_CAPACITY: usize = 100;
 
@@ -34,10 +38,10 @@ pub struct L0bConversionResult {
     pub destination: L0bFileInfo,
 }
 
-struct LoadL0bTasks<const WIDTH: usize, const HEIGHT: usize> {
-    read: JoinHandle<anyhow::Result<()>>,
-    fanout: JoinHandle<anyhow::Result<()>>,
-    decode: JoinHandle<anyhow::Result<()>>,
+struct LoadL0bHandles<const WIDTH: usize, const HEIGHT: usize> {
+    read: JoinHandle<eyre::Result<()>>,
+    fanout: JoinHandle<eyre::Result<()>>,
+    decode: JoinHandle<eyre::Result<()>>,
     inspect: JoinHandle<L0bFileInfo>,
     gather: JoinHandle<DDMFrameMap<WIDTH, HEIGHT>>,
 }
@@ -47,25 +51,16 @@ enum EncoderConfig {
     Mq00(MQ00EncoderConfig),
 }
 
-impl<const WIDTH: usize, const HEIGHT: usize> LoadL0bTasks<WIDTH, HEIGHT> {
-    fn join(self) -> anyhow::Result<L0bFileData<WIDTH, HEIGHT>> {
-        self.read
-            .join()
-            .map_err(|_| anyhow::anyhow!("Read thread panicked"))??;
-        self.fanout
-            .join()
-            .map_err(|_| anyhow::anyhow!("Fanout thread panicked"))??;
-        self.decode
-            .join()
-            .map_err(|_| anyhow::anyhow!("Decode thread panicked"))??;
-        let info = self
-            .inspect
-            .join()
-            .map_err(|_| anyhow::anyhow!("Inspect thread panicked"))?;
-        let frames = self
-            .gather
-            .join()
-            .map_err(|_| anyhow::anyhow!("Gather thread panicked"))?;
+impl<const WIDTH: usize, const HEIGHT: usize> LoadL0bHandles<WIDTH, HEIGHT> {
+    fn join(self) -> eyre::Result<L0bFileData<WIDTH, HEIGHT>> {
+        map_join_err(self.read.join()).wrap_err_with(|| "Error reading file")??;
+        map_join_err(self.fanout.join())
+            .wrap_err_with(|| "Error fanning out data to channels")??;
+        map_join_err(self.decode.join()).wrap_err_with(|| "Error decoding pakcets")??;
+        let info =
+            map_join_err(self.inspect.join()).wrap_err_with(|| "Error inspecting packets")?;
+        let frames = map_join_err(self.gather.join())
+            .wrap_err_with(|| "Error gathering packets in frame map")?;
         Ok(L0bFileData { info, frames })
     }
 }
@@ -77,7 +72,7 @@ impl<const WIDTH: usize, const HEIGHT: usize> LoadL0bTasks<WIDTH, HEIGHT> {
 pub fn inspect_l0b<const WIDTH: usize, const HEIGHT: usize, P>(
     reader: impl Read + Seek + Send + 'static,
     progress: &mut P,
-) -> anyhow::Result<L0bFileInfo>
+) -> eyre::Result<L0bFileInfo>
 where
     P: NestedProgress,
     P::SubProgress: Send + 'static,
@@ -95,11 +90,8 @@ where
     let inspect =
         thread::spawn(move || crate::inspect(&mut packets.receiver, &mut inspect_progress));
 
-    read.join()
-        .map_err(|_| anyhow::anyhow!("Read thread panicked"))??;
-    let info = inspect
-        .join()
-        .map_err(|_| anyhow::anyhow!("Inspect thread panicked"))?;
+    map_join_err(read.join()).wrap_err_with(|| "Error reading file")??;
+    let info = map_join_err(inspect.join()).wrap_err_with(|| "Error inspecting packets")?;
     progress.done("Done".to_owned());
     Ok(info)
 }
@@ -111,7 +103,7 @@ where
 pub fn load_l0b<const WIDTH: usize, const HEIGHT: usize, P>(
     reader: impl Read + Seek + Send + 'static,
     progress: &mut P,
-) -> anyhow::Result<L0bFileData<WIDTH, HEIGHT>>
+) -> eyre::Result<L0bFileData<WIDTH, HEIGHT>>
 where
     P: NestedProgress,
     P::SubProgress: Send + 'static,
@@ -155,7 +147,7 @@ where
         DDMFrameMap::gather(&mut frame_stream.receiver, &mut gather_progress)
     });
 
-    let loaded = LoadL0bTasks {
+    let loaded = LoadL0bHandles {
         read,
         fanout,
         decode,
@@ -181,7 +173,7 @@ pub fn convert_l0b<const WIDTH: usize, const HEIGHT: usize, P>(
     filters: &DDMFilters,
     format: &L0bFormatConfig,
     progress: &mut P,
-) -> anyhow::Result<L0bConversionResult>
+) -> eyre::Result<L0bConversionResult>
 where
     P: NestedProgress,
     P::SubProgress: Send + 'static,
@@ -313,32 +305,16 @@ where
         )
     });
 
-    read.join()
-        .map_err(|_| anyhow::anyhow!("Read thread panicked"))??;
-    decode
-        .join()
-        .map_err(|_| anyhow::anyhow!("Decode thread panicked"))??;
-    filter
-        .join()
-        .map_err(|_| anyhow::anyhow!("Filter thread panicked"))??;
-    encode
-        .join()
-        .map_err(|_| anyhow::anyhow!("Encode thread panicked"))??;
-    write
-        .join()
-        .map_err(|_| anyhow::anyhow!("Write thread panicked"))??;
-    fanout_original
-        .join()
-        .map_err(|_| anyhow::anyhow!("Original fanout thread panicked"))??;
-    fanout_converted
-        .join()
-        .map_err(|_| anyhow::anyhow!("Converted fanout thread panicked"))??;
-    let source = inspect_original
-        .join()
-        .map_err(|_| anyhow::anyhow!("Source inspection thread panicked"))?;
-    let destination = inspect_converted
-        .join()
-        .map_err(|_| anyhow::anyhow!("Destination inspection thread panicked"))?;
+    
+        map_join_err(read.join()).wrap_err_with(|| "Error reading file")??;
+        map_join_err(decode.join()).wrap_err_with(|| "Error decoding packets")??;
+        map_join_err(filter.join()).wrap_err_with(|| "Error filtering frames")??;
+        map_join_err(encode.join()).wrap_err_with(|| "Error encoding frames")??;
+        map_join_err(write.join()).wrap_err_with(|| "Error writing file")??;
+        map_join_err(fanout_original.join()).wrap_err_with(|| "Error fanning out original data")??;
+        map_join_err(fanout_converted.join()).wrap_err_with(|| "Error fanning out converted data")??;
+        let source = map_join_err(inspect_original.join()).wrap_err_with(|| "Error inspecting original packets")?;
+        let destination = map_join_err(inspect_converted.join()).wrap_err_with(|| "Error inspecting converted packets")?;
 
     file_progress.done("Done".to_owned());
     Ok(L0bConversionResult {
@@ -347,7 +323,7 @@ where
     })
 }
 
-fn init_read_progress<P, R>(progress: &mut P, reader: &mut R) -> anyhow::Result<()>
+fn init_read_progress<P, R>(progress: &mut P, reader: &mut R) -> eyre::Result<()>
 where
     P: Progress,
     R: Seek,

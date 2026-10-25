@@ -6,7 +6,6 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-anyhow = "1"
 tracing = { version = "0.1" }
 clap = { version = "4", features = ["derive"] }
 ddm_app = { path = "../ddm_app", features = ["clap"] }

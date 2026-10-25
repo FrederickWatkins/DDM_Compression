@@ -5,6 +5,7 @@ use std::{
     path::Path,
 };
 
+use color_eyre::eyre::{self, Context as _};
 use ddm_app::{DDMFilters, L0bFormatConfig};
 use prodash::NestedProgress;
 
@@ -25,14 +26,14 @@ pub fn convert<P>(
     filters: &DDMFilters,
     format: &L0bFormatConfig,
     progress: &mut P,
-) -> anyhow::Result<impl Display>
+) -> eyre::Result<impl Display>
 where
     P: NestedProgress,
     P::SubProgress: Send + 'static,
 {
     let input_name = display_file_name(input.as_ref());
     let output_name = display_file_name(output.as_ref());
-    let input_size = std::fs::metadata(input.as_ref())?.len();
+    let input_size = std::fs::metadata(input.as_ref()).wrap_err_with(|| format!("Error opening file {}", input.as_ref().display()))?.len();
     let mut conversion_progress =
         progress.add_child(format!("Convert {input_name} into {output_name}"));
     let reader = BufReader::new(File::open(input.as_ref())?);
