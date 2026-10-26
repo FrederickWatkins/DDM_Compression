@@ -1,6 +1,6 @@
 use std::{
     io::{Read, Seek, SeekFrom, Write},
-    thread::{self, JoinHandle},
+    thread::{self, ScopedJoinHandle},
 };
 
 use ddm_core::l0b::{
@@ -38,20 +38,20 @@ pub struct L0bConversionResult {
     pub destination: L0bFileInfo,
 }
 
-struct LoadL0bHandles<const WIDTH: usize, const HEIGHT: usize> {
-    read: JoinHandle<eyre::Result<()>>,
-    fanout: JoinHandle<eyre::Result<()>>,
-    decode: JoinHandle<eyre::Result<()>>,
-    inspect: JoinHandle<L0bFileInfo>,
-    gather: JoinHandle<DDMFrameMap<WIDTH, HEIGHT>>,
+struct LoadL0bHandles<'scope, const WIDTH: usize, const HEIGHT: usize> {
+    read: ScopedJoinHandle<'scope, eyre::Result<()>>,
+    fanout: ScopedJoinHandle<'scope, eyre::Result<()>>,
+    decode: ScopedJoinHandle<'scope, eyre::Result<()>>,
+    inspect: ScopedJoinHandle<'scope, L0bFileInfo>,
+    gather: ScopedJoinHandle<'scope, DDMFrameMap<WIDTH, HEIGHT>>,
 }
 
-enum EncoderConfig {
-    Mp00(u8),
+pub enum EncoderConfig {
+    Mp00(MP00EncoderConfig),
     Mq00(MQ00EncoderConfig),
 }
 
-impl<const WIDTH: usize, const HEIGHT: usize> LoadL0bHandles<WIDTH, HEIGHT> {
+impl<const WIDTH: usize, const HEIGHT: usize> LoadL0bHandles<'_, WIDTH, HEIGHT> {
     fn join(self) -> eyre::Result<L0bFileData<WIDTH, HEIGHT>> {
         map_join_err(self.read.join()).wrap_err_with(|| "Error reading file")??;
         map_join_err(self.fanout.join())
@@ -101,62 +101,129 @@ where
 /// # Errors
 /// Returns errors from the input reader, packet reading, decoding, or worker threads.
 pub fn load_l0b<const WIDTH: usize, const HEIGHT: usize, P>(
-    reader: impl Read + Seek + Send + 'static,
+    mut reader: impl Read + Seek + Send,
     progress: &mut P,
 ) -> eyre::Result<L0bFileData<WIDTH, HEIGHT>>
 where
     P: NestedProgress,
     P::SubProgress: Send + 'static,
 {
-    let mut file_progress = progress.add_child("Load and map L0b");
-    let mut read_progress = file_progress.add_child("Read packets");
-    let mut decode_progress = file_progress.add_child("Decode frames");
-    let mut gather_progress = file_progress.add_child("Gather frames");
-    let mut reader = reader;
-    init_read_progress(&mut read_progress, &mut reader)?;
-    init_count_progress(&mut decode_progress, "frames");
-    init_count_progress(&mut gather_progress, "frames");
+    thread::scope(move |s| {
+        let mut file_progress = progress.add_child("Load and map L0b");
+        let mut read_progress = file_progress.add_child("Read packets");
+        let mut decode_progress = file_progress.add_child("Decode frames");
+        let mut gather_progress = file_progress.add_child("Gather frames");
+        init_read_progress(&mut read_progress, &mut reader)?;
+        init_count_progress(&mut decode_progress, "frames");
+        init_count_progress(&mut gather_progress, "frames");
 
-    let mut read_stream: PipelineChannel<L0bPacket<WIDTH, HEIGHT>> =
-        PipelineChannel::bounded(PIPELINE_CAPACITY);
-    let mut inspect_stream: PipelineChannel<L0bPacket<WIDTH, HEIGHT>> =
-        PipelineChannel::bounded(PIPELINE_CAPACITY);
-    let mut decode_stream: PipelineChannel<L0bPacket<WIDTH, HEIGHT>> =
-        PipelineChannel::bounded(PIPELINE_CAPACITY);
-    let mut frame_stream: PipelineChannel<DDMFrame<WIDTH, HEIGHT>> =
-        PipelineChannel::bounded(PIPELINE_CAPACITY);
+        let mut read_stream: PipelineChannel<L0bPacket<WIDTH, HEIGHT>> =
+            PipelineChannel::bounded(PIPELINE_CAPACITY);
+        let mut inspect_stream: PipelineChannel<L0bPacket<WIDTH, HEIGHT>> =
+            PipelineChannel::bounded(PIPELINE_CAPACITY);
+        let mut decode_stream: PipelineChannel<L0bPacket<WIDTH, HEIGHT>> =
+            PipelineChannel::bounded(PIPELINE_CAPACITY);
+        let mut frame_stream: PipelineChannel<DDMFrame<WIDTH, HEIGHT>> =
+            PipelineChannel::bounded(PIPELINE_CAPACITY);
 
-    let read = thread::spawn(move || {
-        crate::read(&mut reader, &mut read_stream.sender, &mut read_progress)
-    });
-    let fanout = thread::spawn(move || {
-        fanout(
-            &mut read_stream.receiver,
-            &mut [inspect_stream.sender, decode_stream.sender],
-        )
-    });
-    let inspect = thread::spawn(move || crate::inspect(&mut inspect_stream.receiver, &mut Discard));
-    let decode = thread::spawn(move || {
-        crate::decode(
-            &mut decode_stream.receiver,
-            &mut frame_stream.sender,
-            &mut decode_progress,
-        )
-    });
-    let gather = thread::spawn(move || {
-        DDMFrameMap::gather(&mut frame_stream.receiver, &mut gather_progress)
-    });
+        let read =
+            s.spawn(move || crate::read(&mut reader, &mut read_stream.sender, &mut read_progress));
+        let fanout = s.spawn(move || {
+            fanout(
+                &mut read_stream.receiver,
+                &mut [inspect_stream.sender, decode_stream.sender],
+            )
+        });
+        let inspect = s.spawn(move || crate::inspect(&mut inspect_stream.receiver, &mut Discard));
+        let decode = s.spawn(move || {
+            crate::decode(
+                &mut decode_stream.receiver,
+                &mut frame_stream.sender,
+                &mut decode_progress,
+            )
+        });
+        let gather =
+            s.spawn(move || DDMFrameMap::gather(&mut frame_stream.receiver, &mut gather_progress));
 
-    let loaded = LoadL0bHandles {
-        read,
-        fanout,
-        decode,
-        inspect,
-        gather,
-    }
-    .join()?;
-    file_progress.done("Done".to_owned());
-    Ok(loaded)
+        let loaded = LoadL0bHandles {
+            read,
+            fanout,
+            decode,
+            inspect,
+            gather,
+        }
+        .join()?;
+        Ok(loaded)
+    })
+}
+
+/// Save L0b from frame map to writer
+///
+/// # Errors
+/// Returns errors from the writer, packet writing, encoding, or worker threads.
+pub fn save_l0b<const WIDTH: usize, const HEIGHT: usize, P>(
+    mut writer: impl Write + Seek + Send,
+    frames: &DDMFrameMap<WIDTH, HEIGHT>,
+    format: L0bFormatConfig,
+    progress: &mut P,
+) -> eyre::Result<()>
+where
+    P: NestedProgress,
+    P::SubProgress: Send + 'static,
+{
+    thread::scope(move |s| {
+        let mut file_progress = progress.add_child("Encode and write L0b");
+        let mut encode_progress = file_progress.add_child("Encode frames");
+        let mut write_progress = file_progress.add_child("Write packets");
+        init_count_progress(&mut encode_progress, "frames");
+        init_count_progress(&mut write_progress, "frames");
+
+        let mut encode_stream: PipelineChannel<DDMFrame<WIDTH, HEIGHT>> =
+            PipelineChannel::bounded(PIPELINE_CAPACITY);
+        let mut write_stream: PipelineChannel<L0bPacket<WIDTH, HEIGHT>> =
+            PipelineChannel::bounded(PIPELINE_CAPACITY);
+        let encoder_config: EncoderConfig = format.try_into()?;
+        let encode = match encoder_config {
+            EncoderConfig::Mp00(mp00_encoder_config) => {
+                let mut encoder = MP00Encoder::new(mp00_encoder_config);
+                s.spawn(move || {
+                    crate::encode(
+                        &mut encode_stream.receiver,
+                        &mut write_stream.sender,
+                        &mut encoder,
+                        &mut encode_progress,
+                    )
+                })
+            }
+            EncoderConfig::Mq00(mq00_encoder_config) => {
+                let mut encoder = MQ00Encoder::new(mq00_encoder_config);
+                s.spawn(move || {
+                    crate::encode(
+                        &mut encode_stream.receiver,
+                        &mut write_stream.sender,
+                        &mut encoder,
+                        &mut encode_progress,
+                    )
+                })
+            }
+        };
+        let write = s.spawn(move || {
+            crate::write(&mut writer, &mut write_stream.receiver, &mut write_progress)
+        });
+
+        for frame in frames {
+            let Some(frame) = frame else {
+                continue;
+            };
+            encode_stream.sender.send(frame.clone())?;
+        }
+        drop(encode_stream.sender);
+
+        map_join_err(encode.join())??;
+        map_join_err(write.join())??;
+
+        Ok(())
+    })
 }
 
 /// Convert an L0b file by filtering its frames and encoding them in another format.
@@ -194,20 +261,7 @@ where
 
     // Validate encoder settings before starting workers, so invalid options cannot strand a
     // partially started pipeline.
-    let encoder_config = match format {
-        L0bFormatConfig::MP00 { quantisation } => EncoderConfig::Mp00(*quantisation),
-        L0bFormatConfig::MQ00 {
-            quantisation,
-            dc_adjust,
-            wavelet_stages,
-            gop_length,
-        } => EncoderConfig::Mq00(MQ00EncoderConfig::new(
-            *quantisation,
-            *dc_adjust,
-            *wavelet_stages,
-            *gop_length,
-        )?),
-    };
+    let encoder_config = (*format).try_into()?;
 
     let mut read_packet_stream: PipelineChannel<L0bPacket<WIDTH, HEIGHT>> =
         PipelineChannel::bounded(PIPELINE_CAPACITY);
@@ -225,7 +279,6 @@ where
         PipelineChannel::bounded(PIPELINE_CAPACITY);
     let mut write_packet_stream_write: PipelineChannel<L0bPacket<WIDTH, HEIGHT>> =
         PipelineChannel::bounded(PIPELINE_CAPACITY);
-
     let read = thread::spawn(move || {
         crate::read(
             &mut reader,
@@ -263,7 +316,7 @@ where
     });
     let encode = match encoder_config {
         EncoderConfig::Mp00(quantisation) => {
-            let mut encoder = MP00Encoder::new(MP00EncoderConfig::new(quantisation));
+            let mut encoder = MP00Encoder::new(quantisation);
             thread::spawn(move || {
                 crate::encode(
                     &mut encode_frame_stream.receiver,
@@ -304,7 +357,6 @@ where
             &mut write_progress,
         )
     });
-
     map_join_err(read.join()).wrap_err_with(|| "Error reading file")??;
     map_join_err(decode.join()).wrap_err_with(|| "Error decoding packets")??;
     map_join_err(filter.join()).wrap_err_with(|| "Error filtering frames")??;
@@ -325,7 +377,11 @@ where
     })
 }
 
-fn init_read_progress<P, R>(progress: &mut P, reader: &mut R) -> eyre::Result<()>
+/// Init progress in bytes
+///
+/// # Errors
+/// Passes on errors from reader
+pub fn init_read_progress<P, R>(progress: &mut P, reader: &mut R) -> eyre::Result<()>
 where
     P: Progress,
     R: Seek,
@@ -348,7 +404,8 @@ where
     Ok(())
 }
 
-fn init_count_progress<P: Progress>(progress: &mut P, unit_name: &'static str) {
+/// Init progress with discrete count
+pub fn init_count_progress<P: Progress>(progress: &mut P, unit_name: &'static str) {
     let mut formatter = human_format::Formatter::new();
     formatter.with_decimals(2);
     progress.init(

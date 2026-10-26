@@ -1,8 +1,8 @@
 //! DDM command-line entry point.
 
 use clap::Parser as _;
-use color_eyre::eyre::Result;
-use ddm_cli::{Cli, Subcommands, compare, convert, exit_clap_error, inspect};
+use color_eyre::eyre::{self, Result};
+use ddm_cli::{Cli, Subcommands, benchmark, compare, convert, exit_clap_error, inspect};
 use prodash::Root as _;
 
 /// Parse command-line arguments and run the selected command.
@@ -62,14 +62,18 @@ pub fn main() -> Result<()> {
             input,
             output,
             sweep,
-            measurement,
             config,
         } => {
-            dbg!(input);
-            dbg!(output);
-            dbg!(sweep);
-            dbg!(measurement);
-            dbg!(config);
+            let mut progress = root.add_child("Benchmark");
+            let format = config
+                .iter()
+                .map(|c| Ok(c.clone().try_into()?))
+                .collect::<eyre::Result<Vec<_>>>()?;
+            dbg!(input.clone());
+            dbg!(output.clone());
+            dbg!(sweep.clone());
+            dbg!(config.clone());
+            benchmark(input, output, &sweep, &format, &mut progress)?;
         }
     }
     Ok(())

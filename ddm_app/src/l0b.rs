@@ -1,5 +1,9 @@
 use std::{collections::HashSet, fmt::Display};
 
+use ddm_core::l0b::{EncodingError, MP00EncoderConfig, MQ00EncoderConfig};
+
+use crate::file::EncoderConfig;
+
 /// Format used for L0b packets containing frame data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
@@ -62,4 +66,53 @@ pub enum L0bFormatConfig {
         /// Length of a group of pictures.
         gop_length: u8,
     },
+}
+
+impl Display for L0bFormatConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MP00 { quantisation } => {
+                write!(f, "-f mp00 ")?;
+                write!(f, "--quantisation {quantisation}")?;
+            }
+            Self::MQ00 {
+                quantisation,
+                wavelet_stages,
+                gop_length,
+                dc_adjust,
+            } => {
+                write!(f, "-f mq00 ")?;
+                write!(f, "--quantisation {quantisation} ")?;
+                write!(f, "--wavelet-stages {wavelet_stages} ")?;
+                write!(f, "--gop-length {gop_length} ")?;
+                if !dc_adjust {
+                    write!(f, "--no-dc-adjust")?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+impl TryInto<EncoderConfig> for L0bFormatConfig {
+    type Error = EncodingError;
+
+    fn try_into(self) -> Result<EncoderConfig, Self::Error> {
+        match self {
+            Self::MP00 { quantisation } => {
+                Ok(EncoderConfig::Mp00(MP00EncoderConfig::new(quantisation)))
+            }
+            Self::MQ00 {
+                quantisation,
+                dc_adjust,
+                wavelet_stages,
+                gop_length,
+            } => Ok(EncoderConfig::Mq00(MQ00EncoderConfig::new(
+                quantisation,
+                dc_adjust,
+                wavelet_stages,
+                gop_length,
+            )?)),
+        }
+    }
 }

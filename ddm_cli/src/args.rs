@@ -9,11 +9,6 @@ use color_eyre::eyre::{self, Context as _};
 use ddm_app::{DDMFilters, L0bFormat, L0bFormatConfig};
 use tracing::level_filters::LevelFilter;
 
-/// DDM width (delay)
-pub const WIDTH: usize = 20;
-/// DDM height (doppler)
-pub const HEIGHT: usize = 52;
-
 /// Top level args
 #[derive(Parser)]
 pub struct Cli {
@@ -69,9 +64,6 @@ pub enum Subcommands {
         /// Sweep variables
         #[arg(long, short, value_name = "NAME=START-END:STEP")]
         sweep: Vec<Sweep>,
-        /// Measurement variables
-        #[arg(long, short, required=true, num_args=1..)]
-        measurement: Vec<Measurement>,
         /// Test configs. Repeat for each config.
         #[arg(long, short, required=true,
             allow_hyphen_values = true,
@@ -265,18 +257,6 @@ impl FromStr for Sweep {
     }
 }
 
-#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Measurement {
-    /// File size
-    Size,
-    /// Mean square error
-    Mse,
-    /// Root mean square error
-    Rmse,
-    /// Peak signal-to-noise ratio (calculated based on full 16 bit range)
-    Psnr,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum BenchmarkParameter<T> {
     Value(T),
@@ -308,4 +288,81 @@ pub struct BenchmarkL0bFormatArgs {
     pub wavelet_stages: Option<BenchmarkParameter<u8>>,
     #[arg(long)]
     pub gop_length: Option<BenchmarkParameter<u8>>,
+}
+
+pub enum BenchmarkL0bFormatConfig {
+    /// MP00 format.
+    MP00 {
+        /// Pixel quantisation.
+        quantisation: BenchmarkParameter<u8>,
+    },
+    /// MQ00 format.
+    MQ00 {
+        /// Wavelet coefficient quantisation.
+        quantisation: BenchmarkParameter<u8>,
+        /// Whether to apply DC adjustment.
+        dc_adjust: bool,
+        /// Number of wavelet transform stages.
+        wavelet_stages: BenchmarkParameter<u8>,
+        /// Length of a group of pictures.
+        gop_length: BenchmarkParameter<u8>,
+    },
+}
+
+impl TryInto<BenchmarkL0bFormatConfig> for BenchmarkL0bFormatArgs {
+    type Error = clap::Error;
+
+    fn try_into(self) -> Result<BenchmarkL0bFormatConfig, Self::Error> {
+        match self.format {
+            L0bFormat::MP00 => {
+                let mut conflict = Vec::new();
+                if self.no_dc_adjust {
+                    conflict.push("--no-dc-adjust".to_owned());
+                }
+                if self.wavelet_stages.is_some() {
+                    conflict.push("--wavelet-stages <WAVELET_STAGES>".to_owned());
+                }
+                if self.gop_length.is_some() {
+                    conflict.push("--gop-length <GOP_LENGTH>".to_owned());
+                }
+                if conflict.is_empty() {
+                    Ok(BenchmarkL0bFormatConfig::MP00 {
+                        quantisation: self.quantisation,
+                    })
+                } else {
+                    let mut error = clap::Error::new(ErrorKind::ArgumentConflict);
+                    error.insert(
+                        ContextKind::InvalidArg,
+                        ContextValue::String("--format mp00".to_owned()),
+                    );
+                    error.insert(ContextKind::PriorArg, ContextValue::Strings(conflict));
+                    Err(error)
+                }
+            }
+            L0bFormat::MQ00 => {
+                let mut missing = Vec::new();
+                let Some(wavelet_stages) = self.wavelet_stages else {
+                    missing.push("--wavelet-stages <WAVELET_STAGES>".to_owned());
+                    if self.gop_length.is_none() {
+                        missing.push("--gop-length <GOP_LENGTH>".to_owned());
+                    }
+                    let mut error = clap::Error::new(ErrorKind::MissingRequiredArgument);
+                    error.insert(ContextKind::InvalidArg, ContextValue::Strings(missing));
+                    return Err(error);
+                };
+                let Some(gop_length) = self.gop_length else {
+                    missing.push("--gop-length <GOP_LENGTH>".to_owned());
+                    let mut error = clap::Error::new(ErrorKind::MissingRequiredArgument);
+                    error.insert(ContextKind::InvalidArg, ContextValue::Strings(missing));
+                    return Err(error);
+                };
+                Ok(BenchmarkL0bFormatConfig::MQ00 {
+                    quantisation: self.quantisation,
+                    dc_adjust: !self.no_dc_adjust,
+                    wavelet_stages,
+                    gop_length,
+                })
+            }
+        }
+    }
 }
