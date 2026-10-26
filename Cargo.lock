@@ -348,6 +348,7 @@ dependencies = [
  "anyhow",
  "binrw",
  "crc32fast",
+ "image",
  "ndarray",
  "proptest",
  "proptest-derive",

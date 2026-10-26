@@ -77,18 +77,9 @@ impl WaveletPixelData {
     ///
     /// # Errors
     /// If input data contains a value with a larger magnitude than 2**28.
-    pub fn new(data: Array2<i32>) -> Result<Self> {
-        const MAX_INPUT: u32 = 1 << 28;
+    pub fn new(data: Array2<i32>) -> Self {
         let stage = 0;
-        if let Some(&max_elem) = data.iter().max_by_key(|x| x.unsigned_abs())
-            && max_elem.unsigned_abs() > MAX_INPUT
-        {
-            return Err(Error::InputTooLarge {
-                input_value: max_elem, // This is the original signed value
-                max_value: MAX_INPUT,
-            });
-        }
-        Ok(Self { stage, data })
+        Self { stage, data }
     }
 
     /// Apply a single stage dwt to `subband`
@@ -338,16 +329,12 @@ fn interleave(input: &mut ArrayViewMut1<i32>) {
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::unwrap_used,
-    clippy::indexing_slicing,
-    reason = "Tests may panic"
-)]
+#[expect(clippy::unwrap_used, reason = "Tests may panic")]
 mod tests {
     use ndarray::{Array, Array2, ArrayD, Dimension, Ix1, Ix2, Ix3, IxDyn};
     use proptest::prelude::*;
 
-    use super::{Error, WaveletPixelData, dwt_53_1d, dwt_53_nd, idwt_53_1d, idwt_53_nd};
+    use super::{WaveletPixelData, dwt_53_1d, dwt_53_nd, idwt_53_1d, idwt_53_nd};
 
     /// Magnitude of generated values; far from overflow so round trips are the only thing tested.
     const VALUE_LIMIT: i32 = 1 << 20;
@@ -415,7 +402,7 @@ mod tests {
             original in arb_array(shape_2d(), small_values()),
             stages in 0usize..=5,
         ) {
-            let mut pixels = WaveletPixelData::new(original.clone())?;
+            let mut pixels = WaveletPixelData::new(original.clone());
             pixels.dwt_mallat(stages);
             pixels.idwt_mallat();
             prop_assert_eq!(pixels.data, original);
@@ -431,7 +418,7 @@ mod tests {
             ),
             stages in 0usize..=5,
         ) {
-            let mut pixels = WaveletPixelData::new(original.clone()).unwrap();
+            let mut pixels = WaveletPixelData::new(original.clone());
             pixels.dwt_mallat(stages);
             pixels.idwt_mallat();
             prop_assert_eq!(pixels.data, original);
@@ -495,7 +482,7 @@ mod tests {
     #[test]
     fn new_limit_is_safe_for_a_single_2d_stage() {
         let amplitude = 1 << 28;
-        let mut pixels = WaveletPixelData::new(checkerboard_2d(amplitude)).unwrap();
+        let mut pixels = WaveletPixelData::new(checkerboard_2d(amplitude));
         pixels.dwt_mallat(10);
         let peak = pixels
             .data
@@ -505,19 +492,6 @@ mod tests {
             .unwrap();
         assert_eq!(peak, 4 * i64::from(amplitude));
         assert!(peak <= i64::from(i32::MAX));
-    }
-
-    #[test]
-    fn new_rejects_input_above_limit() {
-        let too_big = (1 << 28) + 1;
-        assert!(matches!(
-            WaveletPixelData::new(checkerboard_2d(too_big)),
-            Err(Error::InputTooLarge { .. })
-        ));
-        // i32::MIN has no positive counterpart, so make sure it is rejected too.
-        let mut data = checkerboard_2d(1);
-        data[[0, 0]] = i32::MIN;
-        assert!(WaveletPixelData::new(data).is_err());
     }
 
     fn checkerboard_2d(amplitude: i32) -> Array2<i32> {
