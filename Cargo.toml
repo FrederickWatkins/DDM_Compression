@@ -1,5 +1,5 @@
 [workspace]
-members = ["ddm_app", "ddm_cli", "ddm_core"]
+members = ["ddm_cli", "ddm_core"]
 resolver = "3"
 
 [workspace.package]
@@ -12,7 +12,7 @@ allow_attributes_without_reason = "warn"
 enum_glob_use = "warn"
 expect_used = "deny"
 get_unwrap = "deny"
-indexing_slicing = "deny"
+indexing_slicing = "warn"
 manual_let_else = "warn"
 must_use_candidate = "allow"
 needless_pass_by_value = "warn"
@@ -22,7 +22,7 @@ panic_in_result_fn = "deny"
 return_self_not_must_use = "allow"
 similar_names = "allow"
 string_slice = "deny"
-todo = "deny"
+# todo = "deny"
 unimplemented = "deny"
 unreachable = "deny"
 unwrap_used = "deny"

@@ -1,572 +1,528 @@
-//! Le Gall 5/3 lifting wavelet transform
-//!
-//! Based on mathematical definition in DOI: 10.1109/PACRIM.2001.953547
-#[cfg(not(feature = "std"))]
-use alloc::vec::Vec;
-use core::result::Result;
+//! Wavelet coding libary
 
-use ndarray::{ArrayViewMut, ArrayViewMut1, Axis, Dimension};
+use ndarray::{Array2, ArrayView2, ArrayViewMut, ArrayViewMut1, ArrayViewMut2, Axis, Dimension};
+use thiserror::Error;
 
-/// Failures reported by the integer wavelet transforms.
-#[derive(Debug, thiserror::Error)]
-pub enum WaveletError {
-    /// A caller-provided scratch buffer is too small.
-    #[error("wavelet scratch buffer is too small")]
-    ScratchBufferTooSmall,
-    /// A lifting step exceeded the representable coefficient range.
-    #[error("wavelet coefficient overflow")]
-    CoefficientOverflow,
-    /// A selected axis is outside the array dimensions.
-    #[error("wavelet axis is outside the array dimensions")]
-    InvalidAxis,
-    /// Temporary storage could not be reserved.
-    #[error("wavelet temporary storage could not be reserved")]
-    Allocation,
+/// Wavelet coding error types
+#[derive(Error, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Error {
+    /// Attempted to get/transform a stage higher than the current encoding stage
+    #[error(
+        "Requested stage {requested_stage} from pixel data, but current transformed stage is only {pixel_data_stage}"
+    )]
+    StageTooHigh {
+        /// Stage requested by function
+        requested_stage: usize,
+        /// Current stage of pixel data
+        pixel_data_stage: usize,
+    },
+    /// Attempted to transform when stage too low to perform transform
+    #[error("Attempted to inverse transform data that is already raw")]
+    InvertRaw,
+    /// Input value was too large to safely transform
+    #[error("Input value {input_value} is larger than the safe maximum magnitude {max_value}")]
+    InputTooLarge {
+        /// Input value from caller
+        input_value: i32,
+        /// Maximum value
+        max_value: u32,
+    },
 }
 
-type WaveletResult<T = ()> = Result<T, WaveletError>;
+type Result<T> = std::result::Result<T, Error>;
 
-fn checked_pair_sum(left: i32, right: i32) -> WaveletResult<i32> {
-    left.checked_add(right)
-        .ok_or(WaveletError::CoefficientOverflow)
+/// Wavelet subbands
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum WaveletSubband {
+    /// Low low subband
+    LL,
+    /// Low high subband
+    LH,
+    /// High low subband
+    HL,
+    /// High high subband
+    HH,
 }
 
-fn checked_update(left: i32, right: i32) -> WaveletResult<i32> {
-    checked_pair_sum(left, right)?
-        .checked_add(2)
-        .ok_or(WaveletError::CoefficientOverflow)
+impl WaveletSubband {
+    /// Get 2d index of subband as tuple
+    pub fn as_index(&self) -> (usize, usize) {
+        match self {
+            Self::LL => (0, 0),
+            Self::LH => (0, 1),
+            Self::HL => (1, 0),
+            Self::HH => (1, 1),
+        }
+    }
 }
 
-fn pair(window: &[i32]) -> Option<(i32, i32)> {
-    let (left, rest) = window.split_first()?;
-    rest.first().map(|right| (*left, *right))
+/// Mallat subband
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct MallatSubband {
+    /// Decomposition stage
+    pub stage: usize,
+    /// Frequency subband
+    pub subband: WaveletSubband,
 }
 
-/// Forward 1D DWT wavelet transform
-///
-/// DOI: 10.1109/PACRIM.2001.953547
-///
-/// # Errors
-/// Returns [`WaveletError::CoefficientOverflow`] if a lifting step exceeds the coefficient range,
-/// or [`WaveletError::Allocation`] if temporary storage cannot be reserved.
-pub fn dwt_53(array: ArrayViewMut1<i32>) -> WaveletResult {
-    if array.len() < 3 {
-        return Ok(());
-    }
-
-    let len = array.len();
-    let s_cap = len.div_ceil(2);
-    let d_cap = len / 2;
-
-    let mut d0 = Vec::new();
-    d0.try_reserve_exact(d_cap)
-        .map_err(|_| WaveletError::Allocation)?;
-    d0.extend(array.iter().skip(1).step_by(2).copied());
-    let s0_capacity = s_cap.checked_add(1).ok_or(WaveletError::Allocation)?;
-    let mut s0 = Vec::new();
-    s0.try_reserve_exact(s0_capacity)
-        .map_err(|_| WaveletError::Allocation)?;
-    s0.extend(array.iter().step_by(2).copied());
-
-    let s_len = s0.len();
-    let Some(last_scaling_value) = s0.last().copied() else {
-        return Err(WaveletError::ScratchBufferTooSmall);
-    };
-    s0.push(last_scaling_value);
-
-    let (mut s, mut d) = array.split_at(Axis(0), s_len);
-
-    // Predict
-    for ((d_n, d0_n), (s0_left, s0_right)) in
-        d.iter_mut().zip(&d0).zip(s0.windows(2).filter_map(pair))
-    {
-        *d_n = d0_n
-            .checked_sub(checked_pair_sum(s0_left, s0_right)?.div_euclid(2))
-            .ok_or(WaveletError::CoefficientOverflow)?;
-    }
-
-    // Iterator with padding for boundary conditions
-    let update_pairs = d
-        .iter()
-        .copied()
-        .take(1)
-        .map(|value| (value, value))
-        .chain(d.iter().copied().zip(d.iter().copied().skip(1)))
-        .chain(d.iter().copied().last().map(|value| (value, value)))
-        .take(s_len);
-
-    // Update
-    for ((s_n, s0_n), (d_left, d_right)) in s
-        .iter_mut()
-        .zip(s0.iter().copied().take(s_len))
-        .zip(update_pairs)
-    {
-        *s_n = s0_n
-            .checked_add(checked_update(d_left, d_right)?.div_euclid(4))
-            .ok_or(WaveletError::CoefficientOverflow)?;
-    }
-    Ok(())
+/// Pixel data in wavelet coded format
+#[derive(Debug, Clone)]
+pub struct WaveletPixelData {
+    stage: usize,
+    data: Array2<i32>,
 }
 
-/// Performs a forward 1D 5/3 DWT using caller-provided scratch buffers.
-///
-/// For an input of length `n >= 3`, the scratch buffers must satisfy:
-///
-/// - `d0_scratch.len() >= n / 2`
-/// - `s0_scratch.len() >= n.div_ceil(2) + 1`
-///
-/// The extra element in `s0_scratch` provides padding for the boundary
-/// condition. Buffers may be larger than the minimum required size.
-///
-/// Inputs shorter than 3 return without accessing either scratch buffer.
-///
-/// # Errors
-/// Returns [`WaveletError::ScratchBufferTooSmall`] if either scratch buffer is too short, or
-/// [`WaveletError::CoefficientOverflow`] if a lifting step overflows.
-pub fn dwt_53_scratch(
-    array: ArrayViewMut1<i32>,
-    d0_scratch: &mut [i32],
-    s0_scratch: &mut [i32],
-) -> WaveletResult {
-    if array.len() < 3 {
-        return Ok(());
+impl WaveletPixelData {
+    /// Create from unencoded pixel data
+    ///
+    /// # Errors
+    /// If input data contains a value with a larger magnitude than 2**28.
+    pub fn new(data: Array2<i32>) -> Result<Self> {
+        const MAX_INPUT: u32 = 1 << 28;
+        let stage = 0;
+        if let Some(&max_elem) = data.iter().max_by_key(|x| x.unsigned_abs())
+            && max_elem.unsigned_abs() > MAX_INPUT
+        {
+            return Err(Error::InputTooLarge {
+                input_value: max_elem, // This is the original signed value
+                max_value: MAX_INPUT,
+            });
+        }
+        Ok(Self { stage, data })
     }
 
-    let len = array.len();
-    let s_cap = len.div_ceil(2);
-    let d_cap = len / 2;
-
-    if d0_scratch.len() < d_cap || s0_scratch.len() < s_cap.saturating_add(1) {
-        return Err(WaveletError::ScratchBufferTooSmall);
+    /// Apply a single stage dwt to `subband`
+    #[expect(
+        clippy::unwrap_used,
+        clippy::missing_panics_doc,
+        reason = "Functions guarantees invariant"
+    )]
+    pub fn dwt(&mut self, subband: WaveletSubband) {
+        let mallat_subband = MallatSubband {
+            stage: self.stage,
+            subband,
+        };
+        dwt_53_nd(&mut self.get_mut(mallat_subband).unwrap());
+        self.stage += 1;
     }
 
-    for (x, y) in d0_scratch
-        .iter_mut()
-        .zip(array.iter().skip(1).step_by(2).copied())
-    {
-        *x = y;
-    }
-    for (x, y) in s0_scratch.iter_mut().zip(array.iter().step_by(2).copied()) {
-        *x = y;
-    }
-
-    let s_len = s_cap;
-    let Some(padded_value) = s_cap
-        .checked_sub(1)
-        .and_then(|i| s0_scratch.get(i))
-        .copied()
-    else {
-        return Err(WaveletError::ScratchBufferTooSmall);
-    };
-    let Some(padded_slot) = s0_scratch.get_mut(s_cap) else {
-        return Err(WaveletError::ScratchBufferTooSmall);
-    };
-    *padded_slot = padded_value;
-
-    let (mut s, mut d) = array.split_at(Axis(0), s_len);
-
-    // Predict
-    for ((d_n, d0_n), (s0_left, s0_right)) in d
-        .iter_mut()
-        .zip(d0_scratch.iter())
-        .zip(s0_scratch.windows(2).filter_map(pair))
-    {
-        *d_n = d0_n
-            .checked_sub(checked_pair_sum(s0_left, s0_right)?.div_euclid(2))
-            .ok_or(WaveletError::CoefficientOverflow)?;
+    /// Apply single stage idwt to `subband`
+    ///
+    /// # Errors
+    /// If the pixel data isn't wavelet coded
+    #[expect(
+        clippy::unwrap_used,
+        clippy::missing_panics_doc,
+        reason = "Functions guarantees invariant"
+    )]
+    pub fn idwt(&mut self, subband: WaveletSubband) -> Result<()> {
+        let Some(stage) = self.stage.checked_sub(1) else {
+            return Err(Error::InvertRaw);
+        };
+        let mallat_subband = MallatSubband {
+            stage, // Need to get previous subband for inverse
+            subband,
+        };
+        idwt_53_nd(&mut self.get_mut(mallat_subband).unwrap());
+        self.stage -= 1;
+        Ok(())
     }
 
-    // Iterator with padding for boundary conditions
-    let update_pairs = d
-        .iter()
-        .copied()
-        .take(1)
-        .map(|value| (value, value))
-        .chain(d.iter().copied().zip(d.iter().copied().skip(1)))
-        .chain(d.iter().copied().last().map(|value| (value, value)))
-        .take(s_len);
-
-    // Update
-    for ((s_n, s0_n), (d_left, d_right)) in s
-        .iter_mut()
-        .zip(s0_scratch.iter().copied().take(s_len))
-        .zip(update_pairs)
-    {
-        *s_n = s0_n
-            .checked_add(checked_update(d_left, d_right)?.div_euclid(4))
-            .ok_or(WaveletError::CoefficientOverflow)?;
-    }
-    Ok(())
-}
-
-/// Inverse 1D DWT wavelet transform.
-///
-/// # Errors
-/// Returns [`WaveletError::CoefficientOverflow`] if an inverse lifting step overflows.
-pub fn idwt_53(mut array: ArrayViewMut1<i32>) -> WaveletResult {
-    if array.len() < 3 {
-        return Ok(());
-    }
-
-    let len = array.len();
-    let s_len = len.div_ceil(2);
-    let d_len = len / 2;
-
-    let (s, d) = array.view_mut().split_at(Axis(0), s_len);
-
-    // Allocation 1: Restored scaling coefficients with padding capacity
-    let restored_capacity = s_len.checked_add(1).ok_or(WaveletError::Allocation)?;
-    let mut s_restored = Vec::new();
-    s_restored
-        .try_reserve_exact(restored_capacity)
-        .map_err(|_| WaveletError::Allocation)?;
-
-    let update_pairs = d
-        .iter()
-        .copied()
-        .take(1)
-        .map(|value| (value, value))
-        .chain(d.iter().copied().zip(d.iter().copied().skip(1)))
-        .chain(d.iter().copied().last().map(|value| (value, value)))
-        .take(s_len);
-
-    // Undo update step
-    for (&s_n, (d_left, d_right)) in s.iter().zip(update_pairs) {
-        let restored = s_n
-            .checked_sub(checked_update(d_left, d_right)?.div_euclid(4))
-            .ok_or(WaveletError::CoefficientOverflow)?;
-        s_restored.push(restored);
-    }
-    let Some(last_scaling_value) = s_restored.last().copied() else {
-        return Err(WaveletError::ScratchBufferTooSmall);
-    };
-    s_restored.push(last_scaling_value); // Padding for undo predict
-
-    // Allocation 2: Restored detail coefficients
-    let mut d_restored = Vec::new();
-    d_restored
-        .try_reserve_exact(d_len)
-        .map_err(|_| WaveletError::Allocation)?;
-    for (&d_n, s_window) in d.iter().zip(s_restored.windows(2)) {
-        if let Some((left, right)) = pair(s_window) {
-            d_restored.push(
-                d_n.checked_add(checked_pair_sum(right, left)?.div_euclid(2))
-                    .ok_or(WaveletError::CoefficientOverflow)?,
-            );
+    /// Perform a multi-stage mallat transform on pixel data
+    pub fn dwt_mallat(&mut self, stages: usize) {
+        for _ in 0..stages {
+            self.dwt(WaveletSubband::LL);
         }
     }
 
-    // Interleave scaling and detail coefficients back into the original array
-    let interleave_iter = s_restored
-        .iter()
-        .copied()
-        .take(d_len)
-        .zip(d_restored.iter().copied())
-        .flat_map(|(s_val, d_val)| [s_val, d_val])
-        .chain(s_restored.iter().copied().skip(d_len));
-
-    for (arr_n, val) in array.iter_mut().zip(interleave_iter) {
-        *arr_n = val;
+    /// Invert a multi-stage mallat transform on data
+    pub fn idwt_mallat(&mut self) {
+        while self.idwt(WaveletSubband::LL).is_ok() {}
     }
-    Ok(())
+
+    /// Get subband
+    pub fn get(&self, subband: &MallatSubband) -> Option<ArrayView2<'_, i32>> {
+        if subband.stage > self.stage {
+            return None;
+        }
+
+        let (rows, cols) = self.data.dim();
+        let div = 1usize << subband.stage;
+        let ll_rows = rows.div_ceil(div);
+        let ll_cols = cols.div_ceil(div);
+
+        let (x_index, y_index) = subband.subband.as_index();
+
+        let x_start = x_index * ll_rows;
+        let y_start = y_index * ll_cols;
+        if x_start >= rows || y_start >= cols {
+            return None;
+        }
+        // last chunk will be shorter if dim is not divisable by 2**subband.stage
+        let x_end = (x_start + ll_rows).min(rows);
+        let y_end = (y_start + ll_cols).min(cols);
+
+        Some(self.data.slice(ndarray::s![x_start..x_end, y_start..y_end]))
+    }
+
+    /// Get subband mutably
+    pub fn get_mut(&mut self, subband: MallatSubband) -> Option<ArrayViewMut2<'_, i32>> {
+        if subband.stage > self.stage {
+            return None;
+        }
+
+        let (rows, cols) = self.data.dim();
+        let div = 1usize << subband.stage;
+        let ll_rows = rows.div_ceil(div);
+        let ll_cols = cols.div_ceil(div);
+
+        let (x_index, y_index) = subband.subband.as_index();
+
+        let x_start = x_index * ll_rows;
+        let y_start = y_index * ll_cols;
+        if x_start >= rows || y_start >= cols {
+            return None;
+        }
+        // last chunk will be shorter if dim is not divisable by 2**subband.stage
+        let x_end = (x_start + ll_rows).min(rows);
+        let y_end = (y_start + ll_cols).min(cols);
+
+        Some(
+            self.data
+                .slice_mut(ndarray::s![x_start..x_end, y_start..y_end]),
+        )
+    }
 }
 
-/// Performs an inverse 1D 5/3 DWT using caller-provided scratch buffers.
+/// Le Gall 5/3 N dimensional transform
 ///
-/// For an input of length `n >= 3`, the scratch buffers must satisfy:
-///
-/// - `d_scratch.len() >= n / 2`
-/// - `s_scratch.len() >= n.div_ceil(2) + 1`
-///
-/// The extra element in `s_scratch` provides padding for the boundary
-/// condition. Buffers may be larger than the minimum required size.
-///
-/// Inputs shorter than 3 return without accessing either scratch buffer.
-///
-/// # Errors
-/// Returns [`WaveletError::ScratchBufferTooSmall`] if either scratch buffer is too short, or
-/// [`WaveletError::CoefficientOverflow`] if an inverse lifting step overflows.
-pub fn idwt_53_scratch(
-    mut array: ArrayViewMut1<i32>,
-    d_scratch: &mut [i32],
-    s_scratch: &mut [i32],
-) -> WaveletResult {
-    if array.len() < 3 {
-        return Ok(());
-    }
-
-    let len = array.len();
-    let s_len = len.div_ceil(2);
-    let d_len = len / 2;
-
-    if s_scratch.len() <= s_len || d_scratch.len() < d_len {
-        return Err(WaveletError::ScratchBufferTooSmall);
-    }
-
-    let (s, d) = array.view_mut().split_at(Axis(0), s_len);
-
-    let update_pairs = d
-        .iter()
-        .copied()
-        .take(1)
-        .map(|value| (value, value))
-        .chain(d.iter().copied().zip(d.iter().copied().skip(1)))
-        .chain(d.iter().copied().last().map(|value| (value, value)))
-        .take(s_len);
-
-    // Undo update step
-    for (x, y) in
-        s_scratch
-            .iter_mut()
-            .zip(s.iter().zip(update_pairs).map(|(&s_n, (d_left, d_right))| {
-                s_n.checked_sub(checked_update(d_left, d_right)?.div_euclid(4))
-                    .ok_or(WaveletError::CoefficientOverflow)
-            }))
-    {
-        *x = y?;
-    }
-    let Some(padded_value) = s_len.checked_sub(1).and_then(|i| s_scratch.get(i)).copied() else {
-        return Err(WaveletError::ScratchBufferTooSmall);
-    };
-    let Some(padded_slot) = s_scratch.get_mut(s_len) else {
-        return Err(WaveletError::ScratchBufferTooSmall);
-    };
-    *padded_slot = padded_value; // Padding for undo predict
-
-    // Allocation 2: Restored detail coefficients
-    for (x, y) in d_scratch.iter_mut().zip(
-        d.iter()
-            .zip(s_scratch.windows(2))
-            .filter_map(|(&d_n, s_window)| pair(s_window).map(|(left, right)| (d_n, left, right)))
-            .map(|(d_n, left, right)| {
-                d_n.checked_add(checked_pair_sum(right, left)?.div_euclid(2))
-                    .ok_or(WaveletError::CoefficientOverflow)
-            }),
-    ) {
-        *x = y?;
-    }
-
-    // Interleave scaling and detail coefficients back into the original array
-    let interleave_iter = s_scratch
-        .iter()
-        .copied()
-        .take(d_len)
-        .zip(d_scratch.iter().copied().take(d_len))
-        .flat_map(|(s_val, d_val)| [s_val, d_val])
-        .chain(
-            s_scratch
-                .iter()
-                .copied()
-                .skip(d_len)
-                .take(s_len.saturating_sub(d_len)),
-        );
-
-    for (arr_n, val) in array.iter_mut().zip(interleave_iter) {
-        *arr_n = val;
-    }
-    Ok(())
-}
-
-/// Performs a forward N-D 5/3 DWT across a provided slice of axes
-///
-/// The order of `axes` must be the same in `dwt_53_nd` and `idwt_53_nd` or the transformation may
-/// not be reversible
-///
-/// # Errors
-/// Returns [`WaveletError::InvalidAxis`] for an invalid axis and propagates transform failures.
-pub fn dwt_53_nd<D: Dimension>(mut array: ArrayViewMut<i32, D>, axes: &[Axis]) -> WaveletResult {
-    if axes.iter().any(|axis| axis.0 >= array.ndim()) {
-        return Err(WaveletError::InvalidAxis);
-    }
-    for &axis in axes {
-        for lane in array.lanes_mut(axis) {
-            dwt_53(lane)?;
+/// This function uses the Mallat layout, where low pass coefficient come at a lower index than
+/// higher coefficients on all axes.
+pub fn dwt_53_nd<D: Dimension>(input: &mut ArrayViewMut<i32, D>) {
+    for axis in (0..input.ndim()).map(Axis) {
+        for mut lane in input.lanes_mut(axis) {
+            dwt_53_1d(&mut lane);
         }
     }
-    Ok(())
 }
 
-/// Performs a forward N-D 5/3 DWT across the provided axes using
-/// caller-provided scratch buffers.
+/// Le Gall 5/3 N dimensional transform
 ///
-/// For every selected axis, the scratch buffers must
-/// satisfy:
-///
-/// - `d0_scratch.len() >= n / 2`
-/// - `s0_scratch.len() >= n.div_ceil(2) + 1`
-///
-/// Size the buffers for the longest selected axis. The same buffers are
-/// reused for every lane, so no additional allocation is required per lane.
-/// Axes of length less than 3 require no scratch space.
-///
-/// # Errors
-/// Returns an error if an axis is invalid, a scratch buffer is too small, or a lifting step
-/// overflows.
-///
-/// # Errors
-/// Returns an error if an axis is invalid, a scratch buffer is too small, or a lifting step
-/// overflows.
-pub fn dwt_53_nd_scratch<D: Dimension>(
-    mut array: ArrayViewMut<i32, D>,
-    axes: &[Axis],
-    d0_scratch: &mut [i32],
-    s0_scratch: &mut [i32],
-) -> WaveletResult {
-    if axes.iter().any(|axis| axis.0 >= array.ndim()) {
-        return Err(WaveletError::InvalidAxis);
-    }
-    for &axis in axes {
-        for lane in array.lanes_mut(axis) {
-            dwt_53_scratch(lane, d0_scratch, s0_scratch)?;
+/// This function expects the mallat layout produced by [`dwt_53_nd`].
+pub fn idwt_53_nd<D: Dimension>(input: &mut ArrayViewMut<i32, D>) {
+    for axis in (0..input.ndim()).map(Axis).rev() {
+        for mut lane in input.lanes_mut(axis) {
+            idwt_53_1d(&mut lane);
         }
     }
-    Ok(())
 }
 
-/// Performs an inverse N-D 5/3 DWT across a provided slice of axes (in reverse order)
+/// Le Gall 5/3 1 dimensional transform.
 ///
-/// The order of `axes` must be the same in `dwt_53_nd` and `idwt_53_nd` or the transformation may
-/// not be reversible
-///
-/// # Errors
-/// Returns [`WaveletError::InvalidAxis`] for an invalid axis and propagates transform failures.
-pub fn idwt_53_nd<D: Dimension>(mut array: ArrayViewMut<i32, D>, axes: &[Axis]) -> WaveletResult {
-    if axes.iter().any(|axis| axis.0 >= array.ndim()) {
-        return Err(WaveletError::InvalidAxis);
+/// Works in place and uses the Mallat layout: the `len.div_ceil(2)` lowpass
+/// (approximation) coefficients come first, followed by the `len / 2` highpass
+/// (detail) coefficients.
+pub fn dwt_53_1d(input: &mut ArrayViewMut1<i32>) {
+    if input.len() < 2 {
+        return;
     }
-    for &axis in axes.iter().rev() {
-        for lane in array.lanes_mut(axis) {
-            idwt_53(lane)?;
-        }
-    }
-    Ok(())
+    lift(input, 1, highpass_53);
+    lift(input, 0, lowpass_53);
+    deinterleave(input);
 }
 
-/// Performs an inverse N-D 5/3 DWT across the provided axes in reverse
-/// order, using caller-provided scratch buffers.
+/// Inverse Le Gall 5/3 1 dimensional transform.
 ///
-/// For every selected axis with length, the scratch buffers must
-/// satisfy:
-///
-/// - `d_scratch.len() >= n / 2`
-/// - `s_scratch.len() >= n.div_ceil(2) + 1`
-///
-/// Size the buffers for the longest selected axis. The same buffers are
-/// reused for every lane, so no additional allocation is required per lane.
-/// Axes of length less than 3 require no scratch space.
-///
-/// # Errors
-/// Returns an error if an axis is invalid, a scratch buffer is too small, or a lifting step
-/// overflows.
-pub fn idwt_53_nd_scratch<D: Dimension>(
-    mut array: ArrayViewMut<i32, D>,
-    axes: &[Axis],
-    d_scratch: &mut [i32],
-    s_scratch: &mut [i32],
-) -> WaveletResult {
-    if axes.iter().any(|axis| axis.0 >= array.ndim()) {
-        return Err(WaveletError::InvalidAxis);
+/// Expects the Mallat layout produced by [`dwt_53_1d`].
+pub fn idwt_53_1d(input: &mut ArrayViewMut1<i32>) {
+    if input.len() < 2 {
+        return;
     }
-    for &axis in axes.iter().rev() {
-        for lane in array.lanes_mut(axis) {
-            idwt_53_scratch(lane, d_scratch, s_scratch)?;
-        }
+    interleave(input);
+    lift(input, 0, |s0, d| s0 - lowpass_53(0, d));
+    lift(input, 1, |d0, s| d0 - highpass_53(0, s));
+}
+
+/// Floor of the average of two values, without intermediate overflow.
+fn floor_midpoint(a: i32, b: i32) -> i32 {
+    (a & b) + ((a ^ b) >> 1)
+}
+
+/// Le Gall 5/3 lifting scheme highpass filter: `d0 - floor((s_l + s_r) / 2)`
+fn highpass_53(d0: i32, s0: [i32; 2]) -> i32 {
+    d0 - floor_midpoint(s0[0], s0[1])
+}
+
+/// Le Gall 5/3 lifting scheme lowpass filter: `s0 + floor((d_l + d_r + 2) / 4)`
+fn lowpass_53(s0: i32, d: [i32; 2]) -> i32 {
+    s0 + ((floor_midpoint(d[0], d[1]) + 1) >> 1)
+}
+
+/// Applies one lifting step in place.
+///
+/// Every second sample starting at `start` is replaced by `filter(sample, neighbours)`,
+/// where `neighbours` are the two adjacent samples (mirrored at the boundaries).
+/// Neighbours always have the opposite parity of the updated samples, so they are
+/// never modified during the step.
+fn lift(input: &mut ArrayViewMut1<i32>, start: usize, filter: impl Fn(i32, [i32; 2]) -> i32) {
+    // Indexing is necessary here to satisfy the borrow checker
+    for i in (start..input.len()).step_by(2) {
+        let neighbours = mirrored_neighbours(input, i);
+        input[i] = filter(input[i], neighbours);
     }
-    Ok(())
+}
+
+/// Returns the samples left and right of `index` using whole-sample symmetric
+/// extension, i.e. `x[-1] = x[1]` and `x[len] = x[len - 2]`.
+#[expect(
+    clippy::cast_possible_wrap,
+    reason = "Don't wavelet transform 9 quintiliion values"
+)]
+fn mirrored_neighbours(input: &ArrayViewMut1<i32>, index: usize) -> [i32; 2] {
+    let left = mirror_index(index as isize - 1, input.len());
+    let right = mirror_index(index as isize + 1, input.len());
+    [input[left], input[right]]
+}
+
+/// Reflects an index that is at most one step out of bounds back into `0..len`.
+///
+/// Requires `len >= 2`.
+#[expect(
+    clippy::cast_possible_wrap,
+    reason = "Don't wavelet transform 9 quintiliion values"
+)]
+#[expect(clippy::cast_sign_loss, reason = "Checked manually")]
+fn mirror_index(index: isize, len: usize) -> usize {
+    let last = len as isize - 1;
+    match index {
+        i if i < 0 => (-i) as usize,
+        i if i > last => (2 * last - i) as usize,
+        i => i as usize,
+    }
+}
+
+/// Reorders `[L0 H0 L1 H1 ...]` into the Mallat layout `[L0 L1 ... H0 H1 ...]`.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "Enumerate is derived from vec being indexed"
+)]
+fn deinterleave(input: &mut ArrayViewMut1<i32>) {
+    let samples = input.to_vec();
+    let split = samples.len().div_ceil(2);
+
+    for (i, dst) in input.iter_mut().enumerate() {
+        *dst = if i < split {
+            samples[2 * i]
+        } else {
+            samples[2 * (i - split) + 1]
+        };
+    }
+}
+
+/// Reorders the Mallat layout `[L0 L1 ... H0 H1 ...]` back into `[L0 H0 L1 H1 ...]`.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "Enumerate is derived from vec being indexed"
+)]
+fn interleave(input: &mut ArrayViewMut1<i32>) {
+    let samples = input.to_vec();
+    let split = samples.len().div_ceil(2);
+
+    for (i, dst) in input.iter_mut().enumerate() {
+        *dst = if i % 2 == 0 {
+            samples[i / 2]
+        } else {
+            samples[split + i / 2]
+        };
+    }
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    reason = "Tests may panic"
+)]
 mod tests {
-    use std::ops::Range;
-    #[cfg(not(feature = "std"))]
-    use std::{vec, vec::Vec};
-
-    use ndarray::{Array1, ArrayD};
+    use ndarray::{Array, Array2, ArrayD, Dimension, Ix1, Ix2, Ix3, IxDyn};
     use proptest::prelude::*;
 
-    use super::*;
+    use super::{Error, WaveletPixelData, dwt_53_1d, dwt_53_nd, idwt_53_1d, idwt_53_nd};
 
-    fn arb_array_d_i32(
-        num_dimensions: Range<usize>,
-        axis_length: Range<usize>,
-        inner_strategy: impl Strategy<Value = i32> + Clone,
-    ) -> impl Strategy<Value = ArrayD<i32>> {
-        num_dimensions.prop_flat_map(move |ndim| {
-            prop::collection::vec(axis_length.clone(), ndim).prop_flat_map({
-                let value = inner_strategy.clone();
-                move |shape| {
-                    let len = shape
-                        .iter()
-                        .try_fold(1_usize, |length, axis| length.checked_mul(*axis))
-                        .unwrap_or(0);
-                    prop::collection::vec(value.clone(), len)
-                        .prop_filter_map("array shape must be representable", move |data| {
-                            ArrayD::from_shape_vec(shape.clone(), data).ok()
-                        })
-                }
-            })
+    /// Magnitude of generated values; far from overflow so round trips are the only thing tested.
+    const VALUE_LIMIT: i32 = 1 << 20;
+
+    // ---------- generators ----------
+
+    /// Generates an array of any dimensionality from a shape strategy and a value strategy.
+    fn arb_array<D: Dimension>(
+        shape: impl Strategy<Value = D>,
+        values: impl Strategy<Value = i32> + Clone,
+    ) -> impl Strategy<Value = Array<i32, D>> {
+        shape.prop_flat_map(move |dim| {
+            prop::collection::vec(values.clone(), dim.size())
+                .prop_map(move |v| Array::from_shape_vec(dim.clone(), v).unwrap())
         })
+    }
+
+    fn small_values() -> impl Strategy<Value = i32> + Clone {
+        -VALUE_LIMIT..=VALUE_LIMIT
+    }
+
+    fn shape_1d() -> impl Strategy<Value = Ix1> {
+        (1usize..=64).prop_map(Ix1)
+    }
+
+    fn shape_2d() -> impl Strategy<Value = Ix2> {
+        (1usize..=24, 1usize..=24).prop_map(|(r, c)| Ix2(r, c))
+    }
+
+    fn shape_3d() -> impl Strategy<Value = Ix3> {
+        (1usize..=9, 1usize..=9, 1usize..=9).prop_map(|(a, b, c)| Ix3(a, b, c))
+    }
+
+    // ---------- round trips ----------
+
+    fn assert_nd_roundtrip<D: Dimension>(original: Array<i32, D>) -> Result<(), TestCaseError> {
+        let mut data = original.clone();
+        dwt_53_nd(&mut data.view_mut());
+        idwt_53_nd(&mut data.view_mut());
+        prop_assert_eq!(data, original);
+        Ok(())
     }
 
     proptest! {
         #[test]
-        fn dwt_53_roundtrip(data in prop::collection::vec(-100_000..100_000_i32, 0..128)) {
-            let mut transformed = Array1::from_vec(data.clone());
-            dwt_53(transformed.view_mut())?;
-            idwt_53(transformed.view_mut())?;
-            prop_assert_eq!(data, transformed.iter().copied().collect::<Vec<i32>>());
+        fn roundtrip_1d(original in arb_array(shape_1d(), small_values())) {
+            let mut data = original.clone();
+            dwt_53_1d(&mut data.view_mut());
+            idwt_53_1d(&mut data.view_mut());
+            prop_assert_eq!(data, original);
         }
 
         #[test]
-        fn dwt_53_nd_roundtrip(
-            data in arb_array_d_i32(2..5, 0..20, -100_000..100_000_i32),
-            axes in prop::collection::vec(0..5usize, 1..5)
-                .prop_filter("axes must be unique", |v| {
-                    let set: std::collections::HashSet<_> = v.iter().collect();
-                    set.len() == v.len()
-                }
-            )
+        fn roundtrip_nd_2d(original in arb_array(shape_2d(), small_values())) {
+            assert_nd_roundtrip(original)?;
+        }
+
+        #[test]
+        fn roundtrip_nd_3d(original in arb_array(shape_3d(), small_values())) {
+            assert_nd_roundtrip(original)?;
+        }
+
+        #[test]
+        fn roundtrip_mallat(
+            original in arb_array(shape_2d(), small_values()),
+            stages in 0usize..=5,
         ) {
-            let axes: Vec<_> = axes.iter().filter(|&&x| x < data.ndim()).map(|&x| Axis(x)).collect();
-            let mut transformed = data.clone();
-            dwt_53_nd(transformed.view_mut(), &axes)?;
-            idwt_53_nd(transformed.view_mut(), &axes)?;
-            prop_assert_eq!(data, transformed);
+            let mut pixels = WaveletPixelData::new(original.clone())?;
+            pixels.dwt_mallat(stages);
+            pixels.idwt_mallat();
+            prop_assert_eq!(pixels.data, original);
         }
 
+        /// Random sign patterns at the maximum input magnitude. In debug builds
+        /// (overflow checks on) any overflow in a multi-stage transform panics.
         #[test]
-        fn dwt_53_scratch_roundtrip(data in prop::collection::vec(-100_000..100_000_i32, 0..128)) {
-            let mut transformed = Array1::from_vec(data.clone());
-            let len = transformed.len();
-            let s_cap = len.div_ceil(2).saturating_add(1);
-            let d_cap = len / 2;
-            let mut s_scratch = vec![0; s_cap];
-            let mut d_scratch = vec![0; d_cap];
-            dwt_53_scratch(transformed.view_mut(), &mut d_scratch, &mut s_scratch)?;
-            idwt_53_scratch(transformed.view_mut(), &mut d_scratch, &mut s_scratch)?;
-            prop_assert_eq!(data, transformed.iter().copied().collect::<Vec<i32>>());
-        }
-
-        #[test]
-        fn dwt_53_nd_scratch_roundtrip(
-            data in arb_array_d_i32(2..5, 0..20, -100_000..100_000_i32),
-            axes in prop::collection::vec(0..5usize, 1..5)
-                .prop_filter("axes must be unique", |v| {
-                    let set: std::collections::HashSet<_> = v.iter().collect();
-                    set.len() == v.len()
-                }
-            )
+        fn extreme_inputs_survive_mallat(
+            original in arb_array(
+                shape_2d(),
+                prop_oneof![Just(-(1 << 28)), Just(1 << 28)],
+            ),
+            stages in 0usize..=5,
         ) {
-            let axes: Vec<_> = axes.iter().filter(|&&x| x < data.ndim()).map(|&x| Axis(x)).collect();
-            let mut transformed = data.clone();
-            let len = transformed.shape().iter().copied().fold(0, usize::max);
-            let s_cap = len.div_ceil(2).saturating_add(1);
-            let d_cap = len / 2;
-            let mut s_scratch = vec![0; s_cap];
-            let mut d_scratch = vec![0; d_cap];
-            dwt_53_nd_scratch(transformed.view_mut(), &axes, &mut d_scratch, &mut s_scratch)?;
-            idwt_53_nd_scratch(transformed.view_mut(), &axes, &mut d_scratch, &mut s_scratch)?;
-            prop_assert_eq!(data, transformed);
+            let mut pixels = WaveletPixelData::new(original.clone()).unwrap();
+            pixels.dwt_mallat(stages);
+            pixels.idwt_mallat();
+            prop_assert_eq!(pixels.data, original);
         }
+    }
+
+    // ---------- overflow limit ----------
+
+    /// Largest amplitude for which a single-stage `ndim`-dimensional transform fits in `i32`.
+    ///
+    /// Each axis pass can double the peak magnitude, so the limit is `i32::MAX / 2^ndim`.
+    fn safe_limit(ndim: u32) -> i32 {
+        i32::MAX >> ndim
+    }
+
+    /// `±amplitude` checkerboard: every axis sees an alternating signal.
+    fn checkerboard(shape: &[usize], amplitude: i32) -> ArrayD<i32> {
+        ArrayD::from_shape_fn(IxDyn(shape), |idx| {
+            if idx.slice().iter().sum::<usize>() % 2 == 0 {
+                amplitude
+            } else {
+                -amplitude
+            }
+        })
+    }
+
+    fn peak(data: &ArrayD<i32>) -> i64 {
+        data.iter()
+            .map(|&v| i64::from(v.unsigned_abs()))
+            .max()
+            .unwrap()
+    }
+
+    #[test]
+    fn alternating_extremes_hit_the_gain_bound_in_every_dimension() {
+        for ndim in 1u32..=4 {
+            let limit = safe_limit(ndim);
+            let shape = vec![6; ndim as usize]; // even lengths keep the pattern alternating at the mirrored edges
+
+            for amplitude in [limit, -limit] {
+                let mut data = checkerboard(&shape, amplitude);
+                dwt_53_nd(&mut data.view_mut());
+
+                // The transform reaches exactly 2^ndim * amplitude...
+                let expected = (1i64 << ndim) * i64::from(limit);
+                assert_eq!(peak(&data), expected, "ndim {ndim}, amplitude {amplitude}");
+                assert!(
+                    expected <= i64::from(i32::MAX),
+                    "ndim {ndim}: limit itself overflows"
+                );
+
+                // ...so one more unit of amplitude cannot fit.
+                assert!(
+                    (1i64 << ndim) * (i64::from(limit) + 1) > i64::from(i32::MAX),
+                    "ndim {ndim}: limit is not tight"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn new_limit_is_safe_for_a_single_2d_stage() {
+        let amplitude = 1 << 28;
+        let mut pixels = WaveletPixelData::new(checkerboard_2d(amplitude)).unwrap();
+        pixels.dwt_mallat(10);
+        let peak = pixels
+            .data
+            .iter()
+            .map(|&v| i64::from(v.unsigned_abs()))
+            .max()
+            .unwrap();
+        assert_eq!(peak, 4 * i64::from(amplitude));
+        assert!(peak <= i64::from(i32::MAX));
+    }
+
+    #[test]
+    fn new_rejects_input_above_limit() {
+        let too_big = (1 << 28) + 1;
+        assert!(matches!(
+            WaveletPixelData::new(checkerboard_2d(too_big)),
+            Err(Error::InputTooLarge { .. })
+        ));
+        // i32::MIN has no positive counterpart, so make sure it is rejected too.
+        let mut data = checkerboard_2d(1);
+        data[[0, 0]] = i32::MIN;
+        assert!(WaveletPixelData::new(data).is_err());
+    }
+
+    fn checkerboard_2d(amplitude: i32) -> Array2<i32> {
+        checkerboard(&[64, 64], amplitude)
+            .into_dimensionality()
+            .unwrap()
     }
 }

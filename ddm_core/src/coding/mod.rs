@@ -1,5 +1,3 @@
-//! Module for transformation and encoding techniques
-
-pub mod cabac;
-pub mod crc;
+//! Encoding tools
 pub mod wavelet;
+pub use wavelet::WaveletPixelData;

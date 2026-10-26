@@ -2,24 +2,12 @@
 name = "ddm_cli"
 version = "0.1.0"
 edition = "2024"
-rust-version.workspace = true
 license.workspace = true
+rust-version.workspace = true
 
 [dependencies]
-tracing = { version = "0.1" }
-clap = { version = "4", features = ["derive"] }
-ddm_app = { path = "../ddm_app", features = ["clap"] }
-tracing-subscriber = { version = "0.3", features = ["fmt"] }
-prodash = { version = "31", features = [
-    "render-line",
-    "render-line-crossterm",
-    "render-line-autoconfigure",
-] }
-comfy-table = "8"
-human_format = "1"
-color-eyre = "0.6.5"
-itertools = "0.15.0"
-ddm_core = { version = "0.1.0", path = "../ddm_core" }
+ddm_core = { path = "../ddm_core" }
+image = "0.25"
 
 [lints]
 workspace = true
