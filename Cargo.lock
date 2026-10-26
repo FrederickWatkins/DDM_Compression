@@ -347,6 +347,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "binrw",
+ "bitstream-io",
  "crc32fast",
  "image",
  "ndarray",
