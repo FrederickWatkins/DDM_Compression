@@ -84,7 +84,10 @@ fn is_unhelpful_angle_qualified_symbol(name: &str) -> bool {
                 depth -= 1;
 
                 if depth == 0 {
-                    let suffix = &name[index + 1..];
+                    let suffix_start = index + character.len_utf8();
+                    let Some(suffix) = name.get(suffix_start..) else {
+                        return false;
+                    };
 
                     return suffix.is_empty() || suffix.starts_with("::");
                 }
@@ -132,20 +135,21 @@ fn tokenize_ansi(input: &str) -> Vec<SymbolToken<'_>> {
     let mut index = 0;
 
     while index < bytes.len() {
-        if bytes[index] == 0x1b
+        if bytes.get(index) == Some(&0x1b)
             && bytes.get(index + 1) == Some(&b'[')
         {
             let mut end = index + 2;
 
             while end < bytes.len()
-                && !(0x40..=0x7e).contains(&bytes[end])
+                && !matches!(bytes.get(end), Some(0x40..=0x7e))
             {
                 end += 1;
             }
 
             if end < bytes.len() {
+                let text = input.get(index..=end).unwrap_or_default();
                 tokens.push(SymbolToken {
-                    text: &input[index..=end],
+                    text,
                     character: None,
                     start: index,
                 });
@@ -155,14 +159,15 @@ fn tokenize_ansi(input: &str) -> Vec<SymbolToken<'_>> {
             }
         }
 
-        let Some(character) = input[index..].chars().next() else {
+        let Some(character) = input.get(index..).and_then(|rest| rest.chars().next()) else {
             break;
         };
 
         let end = index + character.len_utf8();
+        let text = input.get(index..end).unwrap_or_default();
 
         tokens.push(SymbolToken {
-            text: &input[index..end],
+            text,
             character: Some(character),
             start: index,
         });
@@ -178,8 +183,8 @@ fn next_visible_token(
     tokens: &[SymbolToken<'_>],
     mut index: usize,
 ) -> Option<usize> {
-    while index < tokens.len() {
-        if tokens[index].character.is_some() {
+    while let Some(token) = tokens.get(index) {
+        if token.character.is_some() {
             return Some(index);
         }
 
@@ -221,11 +226,17 @@ fn strip_symbol_details(symbol: &str) -> String {
             continue;
         };
 
-        if tokens[second].character == Some(':')
-            && tokens[third].character == Some('<')
+        if tokens.get(second).and_then(|token| token.character)
+            == Some(':')
+            && tokens.get(third).and_then(|token| token.character)
+                == Some('<')
         {
-            turbofish_colons[index] = true;
-            turbofish_colons[second] = true;
+            if let Some(flag) = turbofish_colons.get_mut(index) {
+                *flag = true;
+            }
+            if let Some(flag) = turbofish_colons.get_mut(second) {
+                *flag = true;
+            }
         }
     }
 
@@ -260,7 +271,7 @@ fn strip_symbol_details(symbol: &str) -> String {
             continue;
         }
 
-        if turbofish_colons[index] {
+        if turbofish_colons.get(index).copied().unwrap_or(false) {
             continue;
         }
 
@@ -329,7 +340,7 @@ fn frame_symbol_start(line: &str) -> Option<usize> {
     }
 
     let (token_index, _) = visible.get(cursor)?;
-    Some(tokens[*token_index].start)
+    Some(tokens.get(*token_index)?.start)
 }
 
 /// Cleans only numbered function-symbol lines.
@@ -343,8 +354,12 @@ fn clean_backtrace_symbols(input: &str) -> String {
 
     for line in input.split_inclusive('\n') {
         if let Some(symbol_start) = frame_symbol_start(line) {
-            output.push_str(&line[..symbol_start]);
-            output.push_str(&strip_symbol_details(&line[symbol_start..]));
+            if let Some(prefix) = line.get(..symbol_start) {
+                output.push_str(prefix);
+            }
+            if let Some(suffix) = line.get(symbol_start..) {
+                output.push_str(&strip_symbol_details(suffix));
+            }
         } else {
             output.push_str(line);
         }
@@ -399,7 +414,7 @@ impl EyreHandler for SnafuBacktraceHandler {
 
             let formatted = clean_backtrace_symbols(&formatted);
 
-            write!(f, "\n\nSNAFU backtrace:\n{formatted}")?;
+            write!(f, "\n\n{formatted}")?;
         }
 
         Ok(())
@@ -426,7 +441,9 @@ impl EyreHandler for SnafuBacktraceHandler {
 ///
 /// Call once, near the start of `main`, before constructing any eyre reports.
 pub fn install_error_reporting() -> Result<(), eyre::InstallError> {
-    let (panic_hook, eyre_hook) = HookBuilder::default().into_hooks();
+    let (panic_hook, eyre_hook) = HookBuilder::default()
+        .display_env_section(false)
+        .into_hooks();
 
     let default_eyre_hook = eyre_hook.into_eyre_hook();
 
