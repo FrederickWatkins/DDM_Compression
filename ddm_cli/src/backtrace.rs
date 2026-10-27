@@ -117,7 +117,6 @@ fn is_unhelpful_frame(name: &str) -> bool {
 // -----------------------------------------------------------------------------
 
 /// A visible character or an ANSI CSI sequence in formatted output.
-#[cfg(debug_assertions)]
 struct SymbolToken<'a> {
     text: &'a str,
     character: Option<char>,
@@ -128,7 +127,6 @@ struct SymbolToken<'a> {
 ///
 /// ANSI sequences are treated as zero-width tokens, allowing symbol cleanup
 /// to preserve colours without counting escape-code characters as brackets.
-#[cfg(debug_assertions)]
 fn tokenize_ansi(input: &str) -> Vec<SymbolToken<'_>> {
     let bytes = input.as_bytes();
     let mut tokens = Vec::new();
@@ -178,7 +176,6 @@ fn tokenize_ansi(input: &str) -> Vec<SymbolToken<'_>> {
     tokens
 }
 
-#[cfg(debug_assertions)]
 fn next_visible_token(
     tokens: &[SymbolToken<'_>],
     mut index: usize,
@@ -205,7 +202,6 @@ fn next_visible_token(
 ///
 /// ANSI colour sequences are preserved even when they occur inside text
 /// being removed, so that later text is still coloured correctly.
-#[cfg(debug_assertions)]
 fn strip_symbol_details(symbol: &str) -> String {
     let tokens = tokenize_ansi(symbol);
 
@@ -294,7 +290,6 @@ fn strip_symbol_details(symbol: &str) -> String {
 ///
 /// ANSI codes are ignored when parsing the frame number. The returned byte
 /// offset still refers to the original string, including its colour codes.
-#[cfg(debug_assertions)]
 fn frame_symbol_start(line: &str) -> Option<usize> {
     let tokens = tokenize_ansi(line);
 
@@ -348,7 +343,6 @@ fn frame_symbol_start(line: &str) -> Option<usize> {
 /// Crucially, source locations, source snippets, and other formatter output
 /// are copied unchanged. This prevents `<unknown source file>` from being
 /// mistaken for generic arguments.
-#[cfg(debug_assertions)]
 fn clean_backtrace_symbols(input: &str) -> String {
     let mut output = String::with_capacity(input.len());
 
@@ -366,6 +360,20 @@ fn clean_backtrace_symbols(input: &str) -> String {
     }
 
     output
+}
+
+fn panic_environment_section() -> &'static str {
+    match std::env::var("RUST_BACKTRACE") {
+        Ok(value) if value == "full" => {
+            "\n\nRun with COLORBT_SHOW_HIDDEN=1 environment variable to disable frame filtering."
+        }
+        Ok(value) if value != "0" => {
+            "\n\nRun with COLORBT_SHOW_HIDDEN=1 environment variable to disable frame filtering.\nRun with RUST_BACKTRACE=full to include source snippets."
+        }
+        _ => {
+            "\n\nBacktrace omitted. Run with RUST_BACKTRACE=1 environment variable to display it.\n\nRun with RUST_BACKTRACE=full to include source snippets."
+        }
+    }
 }
 
 // -----------------------------------------------------------------------------
@@ -444,6 +452,11 @@ pub fn install_error_reporting() -> Result<(), eyre::InstallError> {
     let (panic_hook, eyre_hook) = HookBuilder::default()
         .display_env_section(false)
         .into_hooks();
+    let panic_hook = Box::new(move |panic_info: &std::panic::PanicHookInfo<'_>| {
+        let report = panic_hook.panic_report(panic_info).to_string();
+        let report = clean_backtrace_symbols(&report);
+        eprintln!("{report}{}", panic_environment_section());
+    });
 
     let default_eyre_hook = eyre_hook.into_eyre_hook();
 
@@ -458,7 +471,7 @@ pub fn install_error_reporting() -> Result<(), eyre::InstallError> {
         })
     }))?;
 
-    panic_hook.install();
+    std::panic::set_hook(panic_hook);
 
     Ok(())
 }
