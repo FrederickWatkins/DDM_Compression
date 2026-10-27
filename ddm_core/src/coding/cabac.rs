@@ -57,7 +57,12 @@
 //! // Encoded size: 26
 //! // Compression ratio: 2.77
 //! ```
-use binrw::io::{Error, ErrorKind, Result};
+#![allow(
+    clippy::indexing_slicing,
+    reason = "Indexing is only done into internal state machine"
+)]
+use std::io;
+
 use bitstream_io::{BitRead, BitWrite};
 
 /// LPS ranges depending on context/encoder state
@@ -128,7 +133,6 @@ const RANGE_TAB_LPS: [[u8; 4]; 64] = [
     [2, 2, 2, 2],
 ];
 
-/// State transition upon encountering MPS
 const TRANS_IDX_MPS: [u8; 64] = [
     1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26,
     27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50,
@@ -201,39 +205,20 @@ impl<W: BitWrite> CabacEncoder<W> {
     ///
     /// # Errors
     /// Passes along any I/O error from the underlying stream.
-    pub fn encode_decision(&mut self, bin_val: bool, ctx: &mut CabacContext) -> Result<()> {
+    pub fn encode_decision(&mut self, bin_val: bool, ctx: &mut CabacContext) -> io::Result<()> {
         let q_cod_i_range_idx = (self.cod_i_range >> 6) & 3;
-        let cod_i_range_lps = u16::from(
-            RANGE_TAB_LPS
-                .get(usize::from(ctx.p_state_idx))
-                .and_then(|row| row.get(usize::from(q_cod_i_range_idx)))
-                .copied()
-                .ok_or_else(|| Error::new(ErrorKind::InvalidData, "invalid CABAC context state"))?,
-        );
-        self.cod_i_range = self
-            .cod_i_range
-            .checked_sub(cod_i_range_lps)
-            .ok_or_else(|| Error::new(ErrorKind::InvalidData, "invalid CABAC encoder range"))?;
+        let cod_i_range_lps =
+            u16::from(RANGE_TAB_LPS[usize::from(ctx.p_state_idx)][usize::from(q_cod_i_range_idx)]);
+        self.cod_i_range -= cod_i_range_lps;
         if bin_val == ctx.mps {
-            ctx.p_state_idx = TRANS_IDX_MPS
-                .get(usize::from(ctx.p_state_idx))
-                .copied()
-                .ok_or_else(|| Error::new(ErrorKind::InvalidData, "invalid CABAC context state"))?;
+            ctx.p_state_idx = TRANS_IDX_MPS[usize::from(ctx.p_state_idx)];
         } else {
-            self.cod_i_low = self
-                .cod_i_low
-                .checked_add(self.cod_i_range)
-                .ok_or_else(|| {
-                    Error::new(ErrorKind::InvalidData, "invalid CABAC encoder low value")
-                })?;
+            self.cod_i_low += self.cod_i_range;
             self.cod_i_range = cod_i_range_lps;
             if ctx.p_state_idx == 0 {
                 ctx.mps = !ctx.mps;
             }
-            ctx.p_state_idx = TRANS_IDX_LPS
-                .get(usize::from(ctx.p_state_idx))
-                .copied()
-                .ok_or_else(|| Error::new(ErrorKind::InvalidData, "invalid CABAC context state"))?;
+            ctx.p_state_idx = TRANS_IDX_LPS[usize::from(ctx.p_state_idx)];
         }
         self.renorm_e()?;
         Ok(())
@@ -246,7 +231,7 @@ impl<W: BitWrite> CabacEncoder<W> {
     ///
     /// # Errors
     /// Passes along any I/O error from the underlying stream.
-    pub fn encode_flush(&mut self) -> Result<()> {
+    pub fn encode_flush(&mut self) -> io::Result<()> {
         self.cod_i_range = 2;
         self.renorm_e()?;
         self.put_bit((self.cod_i_low >> 9) & 1 == 1)?;
@@ -259,22 +244,16 @@ impl<W: BitWrite> CabacEncoder<W> {
     ///
     /// # Errors
     /// Passes along any I/O error from the underlying stream.
-    fn renorm_e(&mut self) -> Result<()> {
+    fn renorm_e(&mut self) -> io::Result<()> {
         while self.cod_i_range < 256 {
             if self.cod_i_low < 256 {
                 self.put_bit(false)?;
             } else if self.cod_i_low >= 512 {
-                self.cod_i_low = self.cod_i_low.checked_sub(512).ok_or_else(|| {
-                    Error::new(ErrorKind::InvalidData, "invalid CABAC encoder low value")
-                })?;
+                self.cod_i_low -= 512;
                 self.put_bit(true)?;
             } else {
-                self.cod_i_low = self.cod_i_low.checked_sub(256).ok_or_else(|| {
-                    Error::new(ErrorKind::InvalidData, "invalid CABAC encoder low value")
-                })?;
-                self.bits_outstanding = self.bits_outstanding.checked_add(1).ok_or_else(|| {
-                    Error::new(ErrorKind::InvalidData, "too many outstanding CABAC bits")
-                })?;
+                self.cod_i_low -= 256;
+                self.bits_outstanding += 1;
             }
             self.cod_i_range <<= 1;
             self.cod_i_low <<= 1;
@@ -286,7 +265,7 @@ impl<W: BitWrite> CabacEncoder<W> {
     ///
     /// # Errors
     /// Passes along any I/O error from the underlying stream.
-    fn put_bit(&mut self, bit: bool) -> Result<()> {
+    fn put_bit(&mut self, bit: bool) -> io::Result<()> {
         if self.first_bit_flag {
             self.first_bit_flag = false;
         } else {
@@ -294,12 +273,7 @@ impl<W: BitWrite> CabacEncoder<W> {
         }
         while self.bits_outstanding > 0 {
             self.writer.write_bit(!bit)?;
-            self.bits_outstanding = self.bits_outstanding.checked_sub(1).ok_or_else(|| {
-                Error::new(
-                    ErrorKind::InvalidData,
-                    "invalid CABAC outstanding bit count",
-                )
-            })?;
+            self.bits_outstanding -= 1;
         }
         Ok(())
     }
@@ -326,7 +300,7 @@ impl<R: BitRead> CabacDecoder<R> {
     ///
     /// # Errors
     /// Passes along any I/O error from the underlying stream.
-    pub fn new(mut reader: R) -> Result<Self> {
+    pub fn new(mut reader: R) -> io::Result<Self> {
         let cod_i_range = 510;
         let cod_i_offset = reader.read::<9, u16>()?;
         Ok(Self {
@@ -340,39 +314,23 @@ impl<R: BitRead> CabacDecoder<R> {
     ///
     /// # Errors
     /// Passes along any I/O error from the underlying stream.
-    pub fn decode_decision(&mut self, ctx: &mut CabacContext) -> Result<bool> {
+    pub fn decode_decision(&mut self, ctx: &mut CabacContext) -> io::Result<bool> {
         let q_cod_i_range_idx = (self.cod_i_range >> 6) & 3;
-        let cod_i_range_lps = *RANGE_TAB_LPS
-            .get(usize::from(ctx.p_state_idx))
-            .and_then(|row| row.get(usize::from(q_cod_i_range_idx)))
-            .ok_or_else(|| Error::new(ErrorKind::InvalidData, "invalid CABAC context state"))?;
+        let cod_i_range_lps =
+            RANGE_TAB_LPS[usize::from(ctx.p_state_idx)][usize::from(q_cod_i_range_idx)];
         let bin_val;
-        self.cod_i_range = self
-            .cod_i_range
-            .checked_sub(u16::from(cod_i_range_lps))
-            .ok_or_else(|| Error::new(ErrorKind::InvalidData, "invalid CABAC decoder range"))?;
+        self.cod_i_range -= u16::from(cod_i_range_lps);
         if self.cod_i_offset < self.cod_i_range {
             bin_val = ctx.mps;
-            ctx.p_state_idx = TRANS_IDX_MPS
-                .get(usize::from(ctx.p_state_idx))
-                .copied()
-                .ok_or_else(|| Error::new(ErrorKind::InvalidData, "invalid CABAC context state"))?;
+            ctx.p_state_idx = TRANS_IDX_MPS[usize::from(ctx.p_state_idx)];
         } else {
             bin_val = !ctx.mps;
-            self.cod_i_offset =
-                self.cod_i_offset
-                    .checked_sub(self.cod_i_range)
-                    .ok_or_else(|| {
-                        Error::new(ErrorKind::InvalidData, "invalid CABAC decoder offset")
-                    })?;
+            self.cod_i_offset -= self.cod_i_range;
             self.cod_i_range = u16::from(cod_i_range_lps);
             if ctx.p_state_idx == 0 {
                 ctx.mps = !ctx.mps;
             }
-            ctx.p_state_idx = TRANS_IDX_LPS
-                .get(usize::from(ctx.p_state_idx))
-                .copied()
-                .ok_or_else(|| Error::new(ErrorKind::InvalidData, "invalid CABAC context state"))?;
+            ctx.p_state_idx = TRANS_IDX_LPS[usize::from(ctx.p_state_idx)];
         }
         self.renorm_d()?;
         Ok(bin_val)
@@ -382,7 +340,7 @@ impl<R: BitRead> CabacDecoder<R> {
     ///
     /// # Errors
     /// Passes along any I/O error from the underlying stream.
-    fn renorm_d(&mut self) -> Result<()> {
+    fn renorm_d(&mut self) -> io::Result<()> {
         while self.cod_i_range < 256 {
             self.cod_i_range <<= 1;
             self.cod_i_offset <<= 1;

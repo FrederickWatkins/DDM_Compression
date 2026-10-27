@@ -1,6 +1,7 @@
 //! Demo that applies a 1 to 3 stage Le Gall 5/3 Mallat transform to each RGB
 //! channel of a PNG. It writes each result as its own PNG, plus one combined
 //! image with the original and all three results side by side.
+#![allow(warnings, clippy::all, clippy::expect_used, reason = "Example code")]
 
 use std::{
     env,
@@ -13,7 +14,6 @@ use image::{GenericImage, Rgb, RgbImage};
 use ndarray::{Array2, ArrayView2};
 
 /// Detail coefficients are small and centred on zero, so they are amplified for display.
-const DETAIL_GAIN: i32 = 4;
 const MAX_STAGES: usize = 3;
 const CHANNELS: usize = 3;
 
