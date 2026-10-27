@@ -1,31 +1,34 @@
 //! Wavelet coding libary
 
 use ndarray::{Array2, ArrayView2, ArrayViewMut, ArrayViewMut1, ArrayViewMut2, Axis, Dimension};
-use thiserror::Error;
+use snafu::{Backtrace, OptionExt, Snafu};
 
 /// Wavelet coding error types
-#[derive(Error, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Snafu, Debug)]
 pub enum Error {
     /// Attempted to get/transform a stage higher than the current encoding stage
-    #[error(
+    #[snafu(display(
         "Requested stage {requested_stage} from pixel data, but current transformed stage is only {pixel_data_stage}"
-    )]
+    ))]
     StageTooHigh {
         /// Stage requested by function
         requested_stage: usize,
         /// Current stage of pixel data
         pixel_data_stage: usize,
+        /// Error backtrace
+        backtrace: Backtrace,
     },
     /// Attempted to transform when stage too low to perform transform
-    #[error("Attempted to inverse transform data that is already raw")]
-    InvertRaw,
+    #[snafu(display("Attempted to inverse transform data that is already raw"))]
+    InvertRaw {
+        /// Error backtrace
+        backtrace: Backtrace,
+    },
     /// Input value was too large to safely transform
-    #[error("Input value {input_value} is larger than the safe maximum magnitude {max_value}")]
-    InputTooLarge {
-        /// Input value from caller
-        input_value: i32,
-        /// Maximum value
-        max_value: u32,
+    #[snafu(display("Attempted calculation overflowed i32 range"))]
+    WaveletOverflow {
+        /// Error backtrace
+        backtrace: Backtrace,
     },
 }
 
@@ -75,55 +78,60 @@ pub struct WaveletPixelData {
 impl WaveletPixelData {
     /// Create from unencoded pixel data
     ///
-    /// # Errors
-    /// If input data contains a value with a larger magnitude than 2**28.
+    /// Note that if the input data spans the full i32 range attempting to transform it will error,
     pub fn new(data: Array2<i32>) -> Self {
         let stage = 0;
         Self { stage, data }
     }
 
     /// Apply a single stage dwt to `subband`
+    ///
+    /// # Errors
+    /// If calculation overflows
     #[expect(
         clippy::unwrap_used,
         clippy::missing_panics_doc,
         reason = "Functions guarantees invariant"
     )]
-    pub fn dwt(&mut self, subband: WaveletSubband) {
+    pub fn dwt(&mut self, subband: WaveletSubband) -> Result<()> {
         let mallat_subband = MallatSubband {
             stage: self.stage,
             subband,
         };
-        dwt_53_nd(&mut self.get_mut(mallat_subband).unwrap());
+        dwt_53_nd(&mut self.get_mut(mallat_subband).unwrap())?;
         self.stage += 1;
+        Ok(())
     }
 
     /// Apply single stage idwt to `subband`
     ///
     /// # Errors
-    /// If the pixel data isn't wavelet coded
+    /// If the pixel data isn't wavelet coded, or if calculation overflows
     #[expect(
         clippy::unwrap_used,
         clippy::missing_panics_doc,
         reason = "Functions guarantees invariant"
     )]
     pub fn idwt(&mut self, subband: WaveletSubband) -> Result<()> {
-        let Some(stage) = self.stage.checked_sub(1) else {
-            return Err(Error::InvertRaw);
-        };
+        let stage = self.stage.checked_sub(1).context(InvertRawSnafu)?;
         let mallat_subband = MallatSubband {
             stage, // Need to get previous subband for inverse
             subband,
         };
-        idwt_53_nd(&mut self.get_mut(mallat_subband).unwrap());
+        idwt_53_nd(&mut self.get_mut(mallat_subband).unwrap())?;
         self.stage -= 1;
         Ok(())
     }
 
     /// Perform a multi-stage mallat transform on pixel data
-    pub fn dwt_mallat(&mut self, stages: usize) {
+    ///
+    /// # Errors
+    /// If calculation overflows
+    pub fn dwt_mallat(&mut self, stages: usize) -> Result<()> {
         for _ in 0..stages {
-            self.dwt(WaveletSubband::LL);
+            self.dwt(WaveletSubband::LL)?;
         }
+        Ok(())
     }
 
     /// Invert a multi-stage mallat transform on data
@@ -189,23 +197,31 @@ impl WaveletPixelData {
 ///
 /// This function uses the Mallat layout, where low pass coefficient come at a lower index than
 /// higher coefficients on all axes.
-pub fn dwt_53_nd<D: Dimension>(input: &mut ArrayViewMut<i32, D>) {
+///
+/// # Errors
+/// If calculation overflows
+pub fn dwt_53_nd<D: Dimension>(input: &mut ArrayViewMut<i32, D>) -> Result<()> {
     for axis in (0..input.ndim()).map(Axis) {
         for mut lane in input.lanes_mut(axis) {
-            dwt_53_1d(&mut lane);
+            dwt_53_1d(&mut lane)?;
         }
     }
+    Ok(())
 }
 
 /// Le Gall 5/3 N dimensional transform
 ///
 /// This function expects the mallat layout produced by [`dwt_53_nd`].
-pub fn idwt_53_nd<D: Dimension>(input: &mut ArrayViewMut<i32, D>) {
+///
+/// # Errors
+/// If calculation overflows
+pub fn idwt_53_nd<D: Dimension>(input: &mut ArrayViewMut<i32, D>) -> Result<()> {
     for axis in (0..input.ndim()).map(Axis).rev() {
         for mut lane in input.lanes_mut(axis) {
-            idwt_53_1d(&mut lane);
+            idwt_53_1d(&mut lane)?;
         }
     }
+    Ok(())
 }
 
 /// Le Gall 5/3 1 dimensional transform.
@@ -213,25 +229,39 @@ pub fn idwt_53_nd<D: Dimension>(input: &mut ArrayViewMut<i32, D>) {
 /// Works in place and uses the Mallat layout: the `len.div_ceil(2)` lowpass
 /// (approximation) coefficients come first, followed by the `len / 2` highpass
 /// (detail) coefficients.
-pub fn dwt_53_1d(input: &mut ArrayViewMut1<i32>) {
+///
+/// # Errors
+/// If calculation overflows
+pub fn dwt_53_1d(input: &mut ArrayViewMut1<i32>) -> Result<()> {
     if input.len() < 2 {
-        return;
+        return Ok(());
     }
-    lift(input, 1, highpass_53);
-    lift(input, 0, lowpass_53);
+    lift(input, 1, highpass_53)?;
+    lift(input, 0, lowpass_53)?;
     deinterleave(input);
+    Ok(())
 }
 
 /// Inverse Le Gall 5/3 1 dimensional transform.
 ///
 /// Expects the Mallat layout produced by [`dwt_53_1d`].
-pub fn idwt_53_1d(input: &mut ArrayViewMut1<i32>) {
+///
+/// # Errors
+/// If calculation overflows
+pub fn idwt_53_1d(input: &mut ArrayViewMut1<i32>) -> Result<()> {
     if input.len() < 2 {
-        return;
+        return Ok(());
     }
     interleave(input);
-    lift(input, 0, |s0, d| s0 - lowpass_53(0, d));
-    lift(input, 1, |d0, s| d0 - highpass_53(0, s));
+    lift(input, 0, |s0, d| {
+        s0.checked_sub(lowpass_53(0, d)?)
+            .context(WaveletOverflowSnafu)
+    })?;
+    lift(input, 1, |d0, s| {
+        d0.checked_sub(highpass_53(0, s)?)
+            .context(WaveletOverflowSnafu)
+    })?;
+    Ok(())
 }
 
 /// Floor of the average of two values, without intermediate overflow.
@@ -240,13 +270,20 @@ fn floor_midpoint(a: i32, b: i32) -> i32 {
 }
 
 /// Le Gall 5/3 lifting scheme highpass filter: `d0 - floor((s_l + s_r) / 2)`
-fn highpass_53(d0: i32, s0: [i32; 2]) -> i32 {
-    d0 - floor_midpoint(s0[0], s0[1])
+fn highpass_53(d0: i32, s0: [i32; 2]) -> Result<i32> {
+    d0.checked_sub(floor_midpoint(s0[0], s0[1]))
+        .context(WaveletOverflowSnafu)
 }
 
 /// Le Gall 5/3 lifting scheme lowpass filter: `s0 + floor((d_l + d_r + 2) / 4)`
-fn lowpass_53(s0: i32, d: [i32; 2]) -> i32 {
-    s0 + ((floor_midpoint(d[0], d[1]) + 1) >> 1)
+fn lowpass_53(s0: i32, d: [i32; 2]) -> Result<i32> {
+    s0.checked_add(
+        (floor_midpoint(d[0], d[1])
+            .checked_add(1)
+            .context(WaveletOverflowSnafu)?)
+            >> 1,
+    )
+    .context(WaveletOverflowSnafu)
 }
 
 /// Applies one lifting step in place.
@@ -255,12 +292,17 @@ fn lowpass_53(s0: i32, d: [i32; 2]) -> i32 {
 /// where `neighbours` are the two adjacent samples (mirrored at the boundaries).
 /// Neighbours always have the opposite parity of the updated samples, so they are
 /// never modified during the step.
-fn lift(input: &mut ArrayViewMut1<i32>, start: usize, filter: impl Fn(i32, [i32; 2]) -> i32) {
+fn lift(
+    input: &mut ArrayViewMut1<i32>,
+    start: usize,
+    filter: impl Fn(i32, [i32; 2]) -> Result<i32>,
+) -> Result<()> {
     // Indexing is necessary here to satisfy the borrow checker
     for i in (start..input.len()).step_by(2) {
         let neighbours = mirrored_neighbours(input, i);
-        input[i] = filter(input[i], neighbours);
+        input[i] = filter(input[i], neighbours)?;
     }
+    Ok(())
 }
 
 /// Returns the samples left and right of `index` using whole-sample symmetric
@@ -372,8 +414,8 @@ mod tests {
 
     fn assert_nd_roundtrip<D: Dimension>(original: Array<i32, D>) -> Result<(), TestCaseError> {
         let mut data = original.clone();
-        dwt_53_nd(&mut data.view_mut());
-        idwt_53_nd(&mut data.view_mut());
+        dwt_53_nd(&mut data.view_mut())?;
+        idwt_53_nd(&mut data.view_mut())?;
         prop_assert_eq!(data, original);
         Ok(())
     }
@@ -382,8 +424,8 @@ mod tests {
         #[test]
         fn roundtrip_1d(original in arb_array(shape_1d(), small_values())) {
             let mut data = original.clone();
-            dwt_53_1d(&mut data.view_mut());
-            idwt_53_1d(&mut data.view_mut());
+            dwt_53_1d(&mut data.view_mut())?;
+            idwt_53_1d(&mut data.view_mut())?;
             prop_assert_eq!(data, original);
         }
 
@@ -403,7 +445,7 @@ mod tests {
             stages in 0usize..=5,
         ) {
             let mut pixels = WaveletPixelData::new(original.clone());
-            pixels.dwt_mallat(stages);
+            pixels.dwt_mallat(stages)?;
             pixels.idwt_mallat();
             prop_assert_eq!(pixels.data, original);
         }
@@ -419,7 +461,7 @@ mod tests {
             stages in 0usize..=5,
         ) {
             let mut pixels = WaveletPixelData::new(original.clone());
-            pixels.dwt_mallat(stages);
+            pixels.dwt_mallat(stages)?;
             pixels.idwt_mallat();
             prop_assert_eq!(pixels.data, original);
         }
@@ -453,14 +495,14 @@ mod tests {
     }
 
     #[test]
-    fn alternating_extremes_hit_the_gain_bound_in_every_dimension() {
+    fn alternating_extremes_hit_the_gain_bound_in_every_dimension() -> Result<(), TestCaseError> {
         for ndim in 1u32..=4 {
             let limit = safe_limit(ndim);
             let shape = vec![6; ndim as usize]; // even lengths keep the pattern alternating at the mirrored edges
 
             for amplitude in [limit, -limit] {
                 let mut data = checkerboard(&shape, amplitude);
-                dwt_53_nd(&mut data.view_mut());
+                dwt_53_nd(&mut data.view_mut())?;
 
                 // The transform reaches exactly 2^ndim * amplitude...
                 let expected = (1i64 << ndim) * i64::from(limit);
@@ -477,13 +519,14 @@ mod tests {
                 );
             }
         }
+        Ok(())
     }
 
     #[test]
-    fn new_limit_is_safe_for_a_single_2d_stage() {
+    fn new_limit_is_safe_for_a_single_2d_stage() -> Result<(), TestCaseError> {
         let amplitude = 1 << 28;
         let mut pixels = WaveletPixelData::new(checkerboard_2d(amplitude));
-        pixels.dwt_mallat(10);
+        pixels.dwt_mallat(10)?;
         let peak = pixels
             .data
             .iter()
@@ -492,6 +535,7 @@ mod tests {
             .unwrap();
         assert_eq!(peak, 4 * i64::from(amplitude));
         assert!(peak <= i64::from(i32::MAX));
+        Ok(())
     }
 
     fn checkerboard_2d(amplitude: i32) -> Array2<i32> {

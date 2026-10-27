@@ -6,8 +6,13 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+color-eyre = "0.6.5"
 ddm_core = { path = "../ddm_core" }
 image = "0.25"
+ndarray = "0.17.2"
+snafu = { version = "0.9", features = ["backtraces-impl-backtrace-crate"] }
+color-backtrace = "0.7"
+regex = "1"
 
 [lints]
 workspace = true

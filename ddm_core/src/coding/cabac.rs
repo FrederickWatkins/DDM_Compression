@@ -77,7 +77,7 @@
 )]
 
 use bitstream_io::{BitRead, BitWrite};
-use thiserror::Error;
+use snafu::{Backtrace, Snafu, ensure};
 
 /// LPS ranges depending on context/encoder state
 const RANGE_TAB_LPS: [[u8; 4]; 64] = [
@@ -161,14 +161,22 @@ const TRANS_IDX_LPS: [u8; 64] = [
 ];
 
 /// Error kind for CABAC processes
-#[derive(Error, Debug)]
+#[derive(Debug, Snafu)]
 pub enum Error {
     /// Error in the underlying stream
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
+    #[snafu(transparent)]
+    Io {
+        /// Error source
+        source: std::io::Error,
+        /// Error backtrace
+        backtrace: Backtrace,
+    },
     /// Tried to decode bits after decoder returned terminate
-    #[error("attempted to decode bins after decoder returned termination signal")]
-    DecodeAfterTerminate,
+    #[snafu(display("Attempted to decode value after terminate flag received"))]
+    DecodeAfterTerminate {
+        /// Error backtrace
+        backtrace: Backtrace,
+    },
 }
 
 type Result<T> = std::result::Result<T, Error>;
@@ -392,9 +400,7 @@ impl<R: BitRead> CabacDecoder<R> {
     /// Passes along any I/O error from the underlying stream. Will error if decoder has already
     /// read a termination flag.
     pub fn decode_decision(&mut self, ctx: &mut CabacContext) -> Result<bool> {
-        if self.finished {
-            return Err(Error::DecodeAfterTerminate);
-        }
+        ensure!(!self.finished, DecodeAfterTerminateSnafu);
         let q_cod_i_range_idx = (self.cod_i_range >> 6) & 3;
         let cod_i_range_lps =
             RANGE_TAB_LPS[usize::from(ctx.p_state_idx)][usize::from(q_cod_i_range_idx)];
@@ -425,9 +431,7 @@ impl<R: BitRead> CabacDecoder<R> {
     /// Passes on errors from the underlying stream. Will error if decoder has already read a
     /// termination flag.
     pub fn decode_bypass(&mut self) -> Result<bool> {
-        if self.finished {
-            return Err(Error::DecodeAfterTerminate);
-        }
+        ensure!(!self.finished, DecodeAfterTerminateSnafu);
         self.cod_i_offset <<= 1;
         if self.reader.read_bit()? {
             self.cod_i_offset |= 1;
@@ -450,9 +454,7 @@ impl<R: BitRead> CabacDecoder<R> {
     /// Passes on errors from the underlying stream. Will error if decoder has already read a
     /// termination flag.
     pub fn decode_terminate(&mut self) -> Result<bool> {
-        if self.finished {
-            return Err(Error::DecodeAfterTerminate);
-        }
+        ensure!(!self.finished, DecodeAfterTerminateSnafu);
         self.cod_i_range -= 2;
         if self.cod_i_offset >= self.cod_i_range {
             self.finished = true;
@@ -719,15 +721,15 @@ mod tests {
         assert!(dec.decode_terminate()?);
         assert!(matches!(
             dec.decode_decision(&mut ctx),
-            Err(Error::DecodeAfterTerminate)
+            Err(Error::DecodeAfterTerminate { .. })
         ));
         assert!(matches!(
             dec.decode_bypass(),
-            Err(Error::DecodeAfterTerminate)
+            Err(Error::DecodeAfterTerminate { .. })
         ));
         assert!(matches!(
             dec.decode_terminate(),
-            Err(Error::DecodeAfterTerminate)
+            Err(Error::DecodeAfterTerminate { .. })
         ));
         Ok(())
     }
