@@ -1,10 +1,6 @@
 //! Custom color-eyre reporting for SNAFU errors.
 
-use std::{
-    error::Error,
-    fmt,
-    panic::Location,
-};
+use std::{error::Error, fmt, panic::Location};
 
 use color_eyre::{
     config::HookBuilder,
@@ -16,13 +12,10 @@ use color_eyre::{
 // -----------------------------------------------------------------------------
 
 #[cfg(debug_assertions)]
-type SnafuBacktraceExtractor =
-    fn(&(dyn Error + 'static)) -> Option<snafu::Backtrace>;
+type SnafuBacktraceExtractor = fn(&(dyn Error + 'static)) -> Option<snafu::Backtrace>;
 
 #[cfg(debug_assertions)]
-fn extract_snafu_backtrace<E>(
-    error: &(dyn Error + 'static),
-) -> Option<snafu::Backtrace>
+fn extract_snafu_backtrace<E>(error: &(dyn Error + 'static)) -> Option<snafu::Backtrace>
 where
     E: Error + snafu::ErrorCompat + 'static,
 {
@@ -36,17 +29,11 @@ const SNAFU_BACKTRACE_EXTRACTORS: &[SnafuBacktraceExtractor] = &[
     extract_snafu_backtrace::<ddm_core::coding::wavelet::Error>,
     extract_snafu_backtrace::<ddm_core::coding::cabac::Error>,
     extract_snafu_backtrace::<ddm_core::l0b::Error>,
-
     // Add the other module error types here:
-    // extract_snafu_backtrace::<ddm_core::coding::cabac::Error>,
-    // extract_snafu_backtrace::<ddm_core::l0b::mp00::Error>,
-    // extract_snafu_backtrace::<ddm_core::l0b::mq00::Error>,
 ];
 
 #[cfg(debug_assertions)]
-fn find_snafu_backtrace(
-    error: &(dyn Error + 'static),
-) -> Option<snafu::Backtrace> {
+fn find_snafu_backtrace(error: &(dyn Error + 'static)) -> Option<snafu::Backtrace> {
     let mut current: Option<&(dyn Error + 'static)> = Some(error);
 
     while let Some(candidate) = current {
@@ -103,7 +90,8 @@ fn is_unhelpful_angle_qualified_symbol(name: &str) -> bool {
 #[cfg(debug_assertions)]
 fn is_unhelpful_frame(name: &str) -> bool {
     name == "main"
-        || name.starts_with("main::")
+        || name.starts_with("std::")
+        || name.starts_with("core::")
         || name.starts_with("__libc_start")
         || name == "_start"
         || name.starts_with("_start::")
@@ -133,14 +121,10 @@ fn tokenize_ansi(input: &str) -> Vec<SymbolToken<'_>> {
     let mut index = 0;
 
     while index < bytes.len() {
-        if bytes.get(index) == Some(&0x1b)
-            && bytes.get(index + 1) == Some(&b'[')
-        {
+        if bytes.get(index) == Some(&0x1b) && bytes.get(index + 1) == Some(&b'[') {
             let mut end = index + 2;
 
-            while end < bytes.len()
-                && !matches!(bytes.get(end), Some(0x40..=0x7e))
-            {
+            while end < bytes.len() && !matches!(bytes.get(end), Some(0x40..=0x7e)) {
                 end += 1;
             }
 
@@ -176,10 +160,7 @@ fn tokenize_ansi(input: &str) -> Vec<SymbolToken<'_>> {
     tokens
 }
 
-fn next_visible_token(
-    tokens: &[SymbolToken<'_>],
-    mut index: usize,
-) -> Option<usize> {
+fn next_visible_token(tokens: &[SymbolToken<'_>], mut index: usize) -> Option<usize> {
     while let Some(token) = tokens.get(index) {
         if token.character.is_some() {
             return Some(index);
@@ -222,10 +203,8 @@ fn strip_symbol_details(symbol: &str) -> String {
             continue;
         };
 
-        if tokens.get(second).and_then(|token| token.character)
-            == Some(':')
-            && tokens.get(third).and_then(|token| token.character)
-                == Some('<')
+        if tokens.get(second).and_then(|token| token.character) == Some(':')
+            && tokens.get(third).and_then(|token| token.character) == Some('<')
         {
             if let Some(flag) = turbofish_colons.get_mut(index) {
                 *flag = true;
@@ -296,9 +275,7 @@ fn frame_symbol_start(line: &str) -> Option<usize> {
     let visible: Vec<(usize, char)> = tokens
         .iter()
         .enumerate()
-        .filter_map(|(index, token)| {
-            token.character.map(|character| (index, character))
-        })
+        .filter_map(|(index, token)| token.character.map(|character| (index, character)))
         .collect();
 
     let mut cursor = 0;
@@ -319,9 +296,7 @@ fn frame_symbol_start(line: &str) -> Option<usize> {
         cursor += 1;
     }
 
-    if cursor == first_digit
-        || visible.get(cursor).map(|(_, character)| *character) != Some(':')
-    {
+    if cursor == first_digit || visible.get(cursor).map(|(_, character)| *character) != Some(':') {
         return None;
     }
 
@@ -388,11 +363,7 @@ struct SnafuBacktraceHandler {
 }
 
 impl EyreHandler for SnafuBacktraceHandler {
-    fn debug(
-        &self,
-        error: &(dyn Error + 'static),
-        f: &mut fmt::Formatter<'_>,
-    ) -> fmt::Result {
+    fn debug(&self, error: &(dyn Error + 'static), f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // Preserve color-eyre's alternate Debug representation.
         if f.alternate() {
             return self.inner.debug(error, f);
@@ -411,8 +382,7 @@ impl EyreHandler for SnafuBacktraceHandler {
 
                         // These frames either add no useful diagnostic
                         // information or cannot provide source locations.
-                        !is_unhelpful_frame(name)
-                            && frame.filename.is_some()
+                        !is_unhelpful_frame(name) && frame.filename.is_some()
                     });
                 }));
 
@@ -428,11 +398,7 @@ impl EyreHandler for SnafuBacktraceHandler {
         Ok(())
     }
 
-    fn display(
-        &self,
-        error: &(dyn Error + 'static),
-        f: &mut fmt::Formatter<'_>,
-    ) -> fmt::Result {
+    fn display(&self, error: &(dyn Error + 'static), f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.inner.display(error, f)
     }
 
