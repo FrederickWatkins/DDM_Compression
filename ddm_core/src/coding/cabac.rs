@@ -1,6 +1,20 @@
 //! Module for CABAC (Context Adaptive Binary Arithmetic Compression) based on H264 standard
 //!
-//! Advanced features like bypass and termination are not supported
+//! There are two possible modes of operation:
+//! - The encoder and decoder can hold a contract for a fixed termination point, either because
+//!   packet length is fixed, or by encoding the length in a header. In this mode,
+//!   [`CabacEncoder::encode_terminate_continue`]/[`CabacEncoder::encode_terminate_finish`] and
+//!   [`CabacDecoder::decode_terminate`] aren't necessary, simply encoding a flush is sufficient.
+//! - The encoder and decoder can hold a contract for certain optional termination points - for
+//!   example, after each bitplane of an image. In this case,
+//!   [`CabacEncoder::encode_terminate_continue`]/[`CabacEncoder::encode_terminate_finish`] and
+//!   [`CabacDecoder::decode_terminate`] must be used at each termination point to determine whether
+//!   to continue. Note that there must be a contract between the encoder and decoder in either
+//!   case, CABAC doesn't support terminating arbitrary length bitstreams.
+//!
+//! The cost of termination flags is non-zero but small. A good rule of thumb is that it costs
+//! roughly 0.01 bits in the encoded stream, so they shouldn't be interlaced between every bit, but
+//! there's no reason not to have them fairly frequently.
 //!
 //! # Examples
 //! ```
@@ -61,9 +75,9 @@
     clippy::indexing_slicing,
     reason = "Indexing is only done into internal state machine"
 )]
-use std::io;
 
 use bitstream_io::{BitRead, BitWrite};
+use thiserror::Error;
 
 /// LPS ranges depending on context/encoder state
 const RANGE_TAB_LPS: [[u8; 4]; 64] = [
@@ -146,6 +160,19 @@ const TRANS_IDX_LPS: [u8; 64] = [
     34, 35, 35, 35, 36, 36, 36, 37, 37, 37, 38, 38, 63,
 ];
 
+/// Error kind for CABAC processes
+#[derive(Error, Debug)]
+pub enum Error {
+    /// Error in the underlying stream
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    /// Tried to decode bits after decoder returned terminate
+    #[error("attempted to decode bins after decoder returned termination signal")]
+    DecodeAfterTerminate,
+}
+
+type Result<T> = std::result::Result<T, Error>;
+
 /// Context for CABAC encoder/decoder
 ///
 /// A single CABAC encoder/decoder can use multiple contexts safely during the same bitstream as
@@ -179,7 +206,7 @@ pub struct CabacEncoder<W> {
     cod_i_low: u16,
     cod_i_range: u16,
     first_bit_flag: bool,
-    bits_outstanding: u8,
+    bits_outstanding: usize,
 }
 
 impl<W> CabacEncoder<W> {
@@ -205,7 +232,7 @@ impl<W: BitWrite> CabacEncoder<W> {
     ///
     /// # Errors
     /// Passes along any I/O error from the underlying stream.
-    pub fn encode_decision(&mut self, bin_val: bool, ctx: &mut CabacContext) -> io::Result<()> {
+    pub fn encode_decision(&mut self, bin_val: bool, ctx: &mut CabacContext) -> Result<()> {
         let q_cod_i_range_idx = (self.cod_i_range >> 6) & 3;
         let cod_i_range_lps =
             u16::from(RANGE_TAB_LPS[usize::from(ctx.p_state_idx)][usize::from(q_cod_i_range_idx)]);
@@ -224,6 +251,32 @@ impl<W: BitWrite> CabacEncoder<W> {
         Ok(())
     }
 
+    /// Encode bits directly to the output stream
+    ///
+    /// This function should be used for high entropy data to avoid incurring the overhead of
+    /// context adaptive encoding where there's nothing to gain from it.
+    ///
+    /// # Errors
+    /// Passes on errors from the underlying writer
+    pub fn encode_bypass(&mut self, bin_val: bool) -> Result<()> {
+        self.cod_i_low <<= 1;
+        if bin_val {
+            self.cod_i_low += self.cod_i_range;
+        }
+        if self.cod_i_low < 1024 {
+            if self.cod_i_low < 512 {
+                self.put_bit(false)?;
+            } else {
+                self.cod_i_low -= 512;
+                self.bits_outstanding += 1;
+            }
+        } else {
+            self.put_bit(true)?;
+            self.cod_i_low -= 1024;
+        }
+        Ok(())
+    }
+
     /// Flush all outstanding bits to the buffer
     ///
     /// This function must be called after all bits have been encoded, otherwise the encoded buffer
@@ -231,7 +284,7 @@ impl<W: BitWrite> CabacEncoder<W> {
     ///
     /// # Errors
     /// Passes along any I/O error from the underlying stream.
-    pub fn encode_flush(&mut self) -> io::Result<()> {
+    pub fn encode_flush(&mut self) -> Result<()> {
         self.cod_i_range = 2;
         self.renorm_e()?;
         self.put_bit((self.cod_i_low >> 9) & 1 == 1)?;
@@ -240,11 +293,31 @@ impl<W: BitWrite> CabacEncoder<W> {
         Ok(())
     }
 
+    /// Encode a flag to continue the stream at a preagreed possible termination point
+    ///
+    /// # Errors
+    /// Passes on errors from the underlying writer
+    pub fn encode_terminate_continue(&mut self) -> Result<()> {
+        self.cod_i_range -= 2;
+        self.renorm_e()
+    }
+
+    /// Encode a flag to finish the stream at a preagreed possible termination point
+    ///
+    /// # Errors
+    /// Passes on errors from the underlying writer
+    pub fn encode_terminate_finish(mut self) -> Result<W> {
+        self.cod_i_range -= 2;
+        self.cod_i_low += self.cod_i_range;
+        self.encode_flush()?;
+        Ok(self.writer)
+    }
+
     /// Renormalize the range and write resolved bits
     ///
     /// # Errors
     /// Passes along any I/O error from the underlying stream.
-    fn renorm_e(&mut self) -> io::Result<()> {
+    fn renorm_e(&mut self) -> Result<()> {
         while self.cod_i_range < 256 {
             if self.cod_i_low < 256 {
                 self.put_bit(false)?;
@@ -265,7 +338,7 @@ impl<W: BitWrite> CabacEncoder<W> {
     ///
     /// # Errors
     /// Passes along any I/O error from the underlying stream.
-    fn put_bit(&mut self, bit: bool) -> io::Result<()> {
+    fn put_bit(&mut self, bit: bool) -> Result<()> {
         if self.first_bit_flag {
             self.first_bit_flag = false;
         } else {
@@ -286,6 +359,7 @@ pub struct CabacDecoder<R> {
     reader: R,
     cod_i_range: u16,
     cod_i_offset: u16,
+    finished: bool,
 }
 
 impl<R> CabacDecoder<R> {
@@ -300,21 +374,27 @@ impl<R: BitRead> CabacDecoder<R> {
     ///
     /// # Errors
     /// Passes along any I/O error from the underlying stream.
-    pub fn new(mut reader: R) -> io::Result<Self> {
+    pub fn new(mut reader: R) -> Result<Self> {
         let cod_i_range = 510;
         let cod_i_offset = reader.read::<9, u16>()?;
+        let finished = false;
         Ok(Self {
             reader,
             cod_i_range,
             cod_i_offset,
+            finished,
         })
     }
 
     /// Decode a single bit
     ///
     /// # Errors
-    /// Passes along any I/O error from the underlying stream.
-    pub fn decode_decision(&mut self, ctx: &mut CabacContext) -> io::Result<bool> {
+    /// Passes along any I/O error from the underlying stream. Will error if decoder has already
+    /// read a termination flag.
+    pub fn decode_decision(&mut self, ctx: &mut CabacContext) -> Result<bool> {
+        if self.finished {
+            return Err(Error::DecodeAfterTerminate);
+        }
         let q_cod_i_range_idx = (self.cod_i_range >> 6) & 3;
         let cod_i_range_lps =
             RANGE_TAB_LPS[usize::from(ctx.p_state_idx)][usize::from(q_cod_i_range_idx)];
@@ -336,11 +416,58 @@ impl<R: BitRead> CabacDecoder<R> {
         Ok(bin_val)
     }
 
+    /// Decode a single bypass bin
+    ///
+    /// Note that the encoder and decoder must have a preagreed contract on when bypass bits are
+    /// used or they will become desynchronised.
+    ///
+    /// # Errors
+    /// Passes on errors from the underlying stream. Will error if decoder has already read a
+    /// termination flag.
+    pub fn decode_bypass(&mut self) -> Result<bool> {
+        if self.finished {
+            return Err(Error::DecodeAfterTerminate);
+        }
+        self.cod_i_offset <<= 1;
+        if self.reader.read_bit()? {
+            self.cod_i_offset |= 1;
+        }
+        if self.cod_i_offset >= self.cod_i_range {
+            self.cod_i_offset -= self.cod_i_range;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    /// Decode a termination flag
+    ///
+    /// Note that the encoder and decoder must have a preagreed contract on when termination flags
+    /// can be encoded or they will become desynchronised. Also note that continuing to use a
+    /// decoder after it returns a 1 from this function will result in an error.
+    ///
+    /// # Errors
+    /// Passes on errors from the underlying stream. Will error if decoder has already read a
+    /// termination flag.
+    pub fn decode_terminate(&mut self) -> Result<bool> {
+        if self.finished {
+            return Err(Error::DecodeAfterTerminate);
+        }
+        self.cod_i_range -= 2;
+        if self.cod_i_offset >= self.cod_i_range {
+            self.finished = true;
+            Ok(true)
+        } else {
+            self.renorm_d()?;
+            Ok(false)
+        }
+    }
+
     /// Renormalize the range and slide in bits from input
     ///
     /// # Errors
     /// Passes along any I/O error from the underlying stream.
-    fn renorm_d(&mut self) -> io::Result<()> {
+    fn renorm_d(&mut self) -> Result<()> {
         while self.cod_i_range < 256 {
             self.cod_i_range <<= 1;
             self.cod_i_offset <<= 1;
@@ -352,50 +479,256 @@ impl<R: BitRead> CabacDecoder<R> {
 
 #[cfg(test)]
 mod tests {
-    use std::{io::Cursor, vec};
+    use std::io::Cursor;
 
     use bitstream_io::{BigEndian, BitReader, BitWriter};
     use proptest::prelude::*;
 
     use super::*;
 
-    proptest! {
-        #[test]
-        fn cabac_roundtrip(data in prop::collection::vec(any::<u64>(), 1..1000)) {
-            let writer = BitWriter::endian(Cursor::new(vec![]), BigEndian);
-            let mut ctx = CabacContext::new();
-            let mut encoder = CabacEncoder::new(writer);
+    const NUM_CTX: usize = 3;
+    /// Percentage chance of a 1 bin per context, so the contexts see skewed statistics
+    const ONE_PERCENT: [u32; NUM_CTX] = [5, 50, 95];
+    const SENTINEL: u16 = 0xA5C3;
 
-            // Encode each bit of every u64 (from MSB to LSB)
-            for &x in &data {
-                for bit_idx in 0..64 {
-                    let bit = (x & (1_u64 << 63_u32.saturating_sub(bit_idx))) != 0;
-                    encoder.encode_decision(bit, &mut ctx)?;
-                }
+    #[derive(Debug, Clone, Copy)]
+    enum Op {
+        Decision { ctx: usize, bin: bool },
+        Bypass(bool),
+    }
+
+    type TestWriter = BitWriter<Cursor<Vec<u8>>, BigEndian>;
+    type TestReader = BitReader<Cursor<Vec<u8>>, BigEndian>;
+
+    fn new_writer() -> TestWriter {
+        BitWriter::endian(Cursor::new(Vec::new()), BigEndian)
+    }
+
+    fn new_reader(data: Vec<u8>) -> TestReader {
+        BitReader::endian(Cursor::new(data), BigEndian)
+    }
+
+    fn new_ctxs() -> Vec<CabacContext> {
+        (0..NUM_CTX).map(|_| CabacContext::new()).collect()
+    }
+
+    fn bins(ops: &[Op]) -> Vec<bool> {
+        ops.iter()
+            .map(|op| match *op {
+                Op::Decision { bin, .. } | Op::Bypass(bin) => bin,
+            })
+            .collect()
+    }
+
+    fn encode_ops<W: BitWrite>(
+        enc: &mut CabacEncoder<W>,
+        ctxs: &mut [CabacContext],
+        ops: &[Op],
+    ) -> Result<()> {
+        for &op in ops {
+            match op {
+                Op::Decision { ctx, bin } => enc.encode_decision(bin, &mut ctxs[ctx])?,
+                Op::Bypass(bin) => enc.encode_bypass(bin)?,
             }
-
-            encoder.encode_flush()?;
-            let mut writer = encoder.into_inner();
-            writer.byte_align()?;
-
-            let encoded_data = writer.into_writer().into_inner();
-
-            // Decode back into a Vec<u64> by grouping every 64 decoded bits
-            let reader = BitReader::endian(Cursor::new(encoded_data), BigEndian);
-            let mut ctx = CabacContext::new();
-            let mut decoder = CabacDecoder::new(reader)?;
-
-            let mut decoded_data = vec![0u64; data.len()];
-            for x in &mut decoded_data {
-                for bit_idx in 0..64 {
-                    let bit = decoder.decode_decision(&mut ctx)?;
-                    if bit {
-                        *x |= 1_u64 << 63_u32.saturating_sub(bit_idx);
-                    }
-                }
-            }
-
-            assert_eq!(data, decoded_data);
         }
+        Ok(())
+    }
+
+    /// The decoder replays the same schedule of operations the encoder used
+    fn decode_ops<R: BitRead>(
+        dec: &mut CabacDecoder<R>,
+        ctxs: &mut [CabacContext],
+        ops: &[Op],
+    ) -> Result<Vec<bool>> {
+        ops.iter()
+            .map(|&op| match op {
+                Op::Decision { ctx, .. } => dec.decode_decision(&mut ctxs[ctx]),
+                Op::Bypass(_) => dec.decode_bypass(),
+            })
+            .collect()
+    }
+
+    fn op() -> impl Strategy<Value = Op> {
+        prop_oneof![
+            3 => (0..NUM_CTX, 0u32..100).prop_map(|(ctx, roll)| Op::Decision {
+                ctx,
+                bin: roll < ONE_PERCENT[ctx],
+            }),
+            1 => any::<bool>().prop_map(Op::Bypass),
+        ]
+    }
+
+    /// Long runs of an identical op, to exercise the outstanding-bits path and state saturation
+    fn run_ops() -> impl Strategy<Value = Vec<Op>> {
+        prop::collection::vec((op(), 1usize..300), 1..20)
+            .prop_map(|runs| runs.into_iter().flat_map(|(op, n)| vec![op; n]).collect())
+    }
+
+    /// Chunks of ops separated by termination boundaries, plus the boundary index to stop at
+    fn chunks_with_stop() -> impl Strategy<Value = (Vec<Vec<Op>>, usize)> {
+        prop::collection::vec(prop::collection::vec(op(), 0..12), 0..40).prop_flat_map(|chunks| {
+            let n = chunks.len();
+            (Just(chunks), 0..=n)
+        })
+    }
+
+    proptest! {
+        /// Bypass and decision bins mixed, flush-only termination, with an exact end-position check
+        #[test]
+        fn flush_only_mixed_roundtrip(ops in run_ops()) {
+            let mut enc = CabacEncoder::new(new_writer());
+            let mut ctxs = new_ctxs();
+            encode_ops(&mut enc, &mut ctxs, &ops)?;
+            enc.encode_flush()?;
+            let mut writer = enc.into_inner();
+            writer.write::<16, u16>(SENTINEL)?;
+            writer.byte_align()?;
+            let data = writer.into_writer().into_inner();
+
+            let mut dec = CabacDecoder::new(new_reader(data))?;
+            let mut ctxs = new_ctxs();
+            let got = decode_ops(&mut dec, &mut ctxs, &ops)?;
+            prop_assert_eq!(got, bins(&ops));
+            prop_assert_eq!(dec.into_inner().read::<16, u16>()?, SENTINEL);
+        }
+
+        /// Same, but ending with terminate(1) instead of a bare flush
+        #[test]
+        fn terminate_finish_mixed_roundtrip(ops in run_ops()) {
+            let mut enc = CabacEncoder::new(new_writer());
+            let mut ctxs = new_ctxs();
+            encode_ops(&mut enc, &mut ctxs, &ops)?;
+            let mut writer = enc.encode_terminate_finish()?;
+            writer.write::<16, u16>(SENTINEL)?;
+            writer.byte_align()?;
+            let data = writer.into_writer().into_inner();
+
+            let mut dec = CabacDecoder::new(new_reader(data))?;
+            let mut ctxs = new_ctxs();
+            let got = decode_ops(&mut dec, &mut ctxs, &ops)?;
+            prop_assert_eq!(got, bins(&ops));
+            prop_assert!(dec.decode_terminate()?);
+            prop_assert_eq!(dec.into_inner().read::<16, u16>()?, SENTINEL);
+        }
+
+        /// A terminate boundary before every chunk. The encoder chooses which boundary is the last.
+        #[test]
+        fn terminate_schedule_roundtrip((chunks, stop_at) in chunks_with_stop()) {
+            let mut enc = CabacEncoder::new(new_writer());
+            let mut ctxs = new_ctxs();
+            for chunk in chunks.iter().take(stop_at) {
+                enc.encode_terminate_continue()?;
+                encode_ops(&mut enc, &mut ctxs, chunk)?;
+            }
+            let mut writer = enc.encode_terminate_finish()?;
+            writer.write::<16, u16>(SENTINEL)?;
+            writer.byte_align()?;
+            let data = writer.into_writer().into_inner();
+
+            let mut dec = CabacDecoder::new(new_reader(data))?;
+            let mut ctxs = new_ctxs();
+            let mut decoded_chunks = 0;
+            for chunk in &chunks {
+                if dec.decode_terminate()? {
+                    break;
+                }
+                let got = decode_ops(&mut dec, &mut ctxs, chunk)?;
+                prop_assert_eq!(got, bins(chunk));
+                decoded_chunks += 1;
+            }
+            if decoded_chunks == chunks.len() {
+                // The boundary after the final chunk must also be present
+                prop_assert!(dec.decode_terminate()?);
+            }
+            prop_assert_eq!(decoded_chunks, stop_at);
+            prop_assert_eq!(dec.into_inner().read::<16, u16>()?, SENTINEL);
+        }
+
+        /// Several independent segments in one stream, each starting on a byte boundary
+        #[test]
+        fn multi_segment_roundtrip(
+            segments in prop::collection::vec(prop::collection::vec(op(), 0..100), 1..6)
+        ) {
+            let mut writer = new_writer();
+            for seg in &segments {
+                let mut enc = CabacEncoder::new(writer);
+                let mut ctxs = new_ctxs();
+                encode_ops(&mut enc, &mut ctxs, seg)?;
+                writer = enc.encode_terminate_finish()?;
+                writer.byte_align()?;
+            }
+            let data = writer.into_writer().into_inner();
+
+            let mut reader = new_reader(data);
+            for seg in &segments {
+                let mut dec = CabacDecoder::new(reader)?;
+                let mut ctxs = new_ctxs();
+                let got = decode_ops(&mut dec, &mut ctxs, seg)?;
+                prop_assert_eq!(got, bins(seg));
+                prop_assert!(dec.decode_terminate()?);
+                reader = dec.into_inner();
+                reader.byte_align();
+            }
+        }
+    }
+
+    #[test]
+    fn terminate_continue_is_cheap() -> Result<()> {
+        let mut enc = CabacEncoder::new(new_writer());
+        for _ in 0..1000 {
+            enc.encode_terminate_continue()?;
+        }
+        let mut writer = enc.encode_terminate_finish()?;
+        writer.byte_align()?;
+        let data = writer.into_writer().into_inner();
+        // 1000 * ~0.01 bits plus ~10 bits of flush overhead
+        assert!(data.len() <= 4, "stream was {} bytes", data.len());
+
+        let mut dec = CabacDecoder::new(new_reader(data))?;
+        for _ in 0..1000 {
+            assert!(!dec.decode_terminate()?);
+        }
+        assert!(dec.decode_terminate()?);
+        Ok(())
+    }
+
+    #[test]
+    fn terminate_immediately() -> Result<()> {
+        let enc = CabacEncoder::new(new_writer());
+        let mut writer = enc.encode_terminate_finish()?;
+        writer.byte_align()?;
+        let data = writer.into_writer().into_inner();
+
+        let mut dec = CabacDecoder::new(new_reader(data))?;
+        assert!(dec.decode_terminate()?);
+        Ok(())
+    }
+
+    #[test]
+    fn use_after_terminate_errors() -> Result<()> {
+        let mut enc = CabacEncoder::new(new_writer());
+        let mut ctx = CabacContext::new();
+        enc.encode_decision(true, &mut ctx)?;
+        let mut writer = enc.encode_terminate_finish()?;
+        writer.byte_align()?;
+        let data = writer.into_writer().into_inner();
+
+        let mut dec = CabacDecoder::new(new_reader(data))?;
+        let mut ctx = CabacContext::new();
+        assert!(dec.decode_decision(&mut ctx)?);
+        assert!(dec.decode_terminate()?);
+        assert!(matches!(
+            dec.decode_decision(&mut ctx),
+            Err(Error::DecodeAfterTerminate)
+        ));
+        assert!(matches!(
+            dec.decode_bypass(),
+            Err(Error::DecodeAfterTerminate)
+        ));
+        assert!(matches!(
+            dec.decode_terminate(),
+            Err(Error::DecodeAfterTerminate)
+        ));
+        Ok(())
     }
 }
