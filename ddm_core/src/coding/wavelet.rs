@@ -109,7 +109,7 @@ impl WaveletPixelData {
 
     /// Returns parents first, then children, grandchildren etc; so higehst stage first
     pub fn ac_subbands(&self) -> impl Iterator<Item = impl Iterator<Item = ArrayView2<'_, i32>>> {
-        (1..self.stage)
+        (1..=self.stage)
             .rev()
             .filter_map(move |stage| self.stage_ac_subbands(stage))
     }
