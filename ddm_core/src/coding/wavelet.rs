@@ -1,13 +1,10 @@
 //! Wavelet coding libary
 
-use ndarray::{Array2, ArrayView2, ArrayViewMut, ArrayViewMut1, ArrayViewMut2, Axis, Dimension};
+use ndarray::{Array2, ArrayView2, ArrayViewMut, ArrayViewMut1, ArrayViewMut2, Axis, Dimension, Ix2};
 use snafu::{Backtrace, OptionExt, Snafu};
 
-const AC_SUBBAND_ORDER: [WaveletSubband; 3] = [
-    WaveletSubband::LH,
-    WaveletSubband::HL,
-    WaveletSubband::HH,
-];
+const AC_SUBBAND_ORDER: [WaveletSubband; 3] =
+    [WaveletSubband::LH, WaveletSubband::HL, WaveletSubband::HH];
 
 /// Wavelet coding error types
 #[derive(Snafu, Debug)]
@@ -78,6 +75,12 @@ impl WaveletPixelData {
         Self { stage, data }
     }
 
+    /// Create new empty encoded pixel data
+    pub fn empty(shape: Ix2, stage: u8) -> Self {
+        let data = Array2::from_elem(shape, 0);
+        Self { stage, data }
+    }
+
     /// Current stage
     pub fn stage(&self) -> u8 {
         self.stage
@@ -87,22 +90,58 @@ impl WaveletPixelData {
     ///
     /// Returns none if empty
     pub fn dc_subband(&self) -> Option<ArrayView2<'_, i32>> {
-        self.get(&MallatSubband {stage: self.stage, subband: WaveletSubband::LL})
+        self.get(MallatSubband {
+            stage: self.stage,
+            subband: WaveletSubband::LL,
+        })
     }
-    
+
+    /// Get DC subband; so only the highest order LL subband
+    ///
+    /// Returns none if empty
+    pub fn dc_subband_mut(&mut self) -> Option<ArrayViewMut2<'_, i32>> {
+        self.get_mut(MallatSubband {
+            stage: self.stage,
+            subband: WaveletSubband::LL,
+        })
+    }
+
     /// Returns parents first, then children, grandchildren etc; so higehst stage first
-    pub fn ac_subbands(&self) -> impl Iterator<Item = impl Iterator<Item = ArrayView2<'_, i32>>>
-    {
-        (1..self.stage).rev().filter_map(move |stage| self.stage_ac_subbands(stage))
+    pub fn ac_subbands(&self) -> impl Iterator<Item = impl Iterator<Item = ArrayView2<'_, i32>>> {
+        (1..self.stage)
+            .rev()
+            .filter_map(move |stage| self.stage_ac_subbands(stage))
     }
 
     /// AC (LH, HL, HH) subbands for a particular stage
     ///
     /// Returns none if the `stage` is zero or larger than the data's current stage.
-    pub fn stage_ac_subbands(&self, stage: u8) -> Option<impl Iterator<Item = ArrayView2<'_, i32>>> {
-        let subbands = AC_SUBBAND_ORDER.map(|subband| MallatSubband {stage,  subband});
-        let [a, b, c] = subbands.map(|subband| self.get(&subband));
+    pub fn stage_ac_subbands(
+        &self,
+        stage: u8,
+    ) -> Option<impl Iterator<Item = ArrayView2<'_, i32>>> {
+        let subbands = AC_SUBBAND_ORDER.map(|subband| MallatSubband { stage, subband });
+        let [a, b, c] = subbands.map(|subband| self.get(subband));
         Some([a?, b?, c?].into_iter())
+    }
+
+    /// Visit each subband in parent to child order and mutate in-place
+    ///
+    /// # Errors
+    /// Passes on any error from the closure
+    pub fn for_each_ac_subband_mut<E>(
+        &mut self,
+        mut visit: impl FnMut(u8, ArrayViewMut2<'_, i32>) -> std::result::Result<(), E>,
+    ) -> std::result::Result<(), E> {
+        for (i, stage) in (1..=self.stage()).rev().enumerate() {
+            for subband in AC_SUBBAND_ORDER {
+                if let Some(view) = self.get_mut(MallatSubband { stage, subband }) {
+                    #[expect(clippy::cast_possible_truncation, reason = "Stage can't be above u8")]
+                    visit(i as u8, view)?;
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Apply a single stage dwt to `subband`
@@ -161,7 +200,7 @@ impl WaveletPixelData {
     }
 
     /// Get subband
-    pub fn get(&self, subband: &MallatSubband) -> Option<ArrayView2<'_, i32>> {
+    pub fn get(&self, subband: MallatSubband) -> Option<ArrayView2<'_, i32>> {
         if subband.stage > self.stage {
             return None;
         }
