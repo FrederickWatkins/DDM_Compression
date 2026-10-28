@@ -645,3 +645,278 @@ fn sign_extend(bits: u32, width: u8) -> i32 {
     let shift = u32::BITS - u32::from(width);
     (bits << shift).cast_signed() >> shift
 }
+
+#[cfg(test)]
+mod tests {
+    use std::io::Cursor;
+
+    use bitstream_io::{BigEndian, BitReader, BitWrite, BitWriter};
+    use proptest::prelude::*;
+    use proptest::test_runner::TestCaseError;
+
+    use super::*;
+
+    const TEST_SHAPE: (usize, usize) = (4, 4);
+    const TEST_COEFFICIENTS: usize = TEST_SHAPE.0 * TEST_SHAPE.1;
+    const TEST_STAGES: u8 = 2;
+
+    /// Generate every combination of the encoding options.
+    ///
+    /// There are 4 DC encodings, 4 AC encodings, 2 significant-bit
+    /// encodings, 3 neighbour encodings and 4 refinement encodings:
+    /// 4 * 4 * 2 * 3 * 4 = 384 configurations.
+    fn configurations(quantisation: Quantisation) -> Vec<BitplaneConfig> {
+        let sign_encodings = [
+            SignEncoding::Bitplanes { bypass_sign: false },
+            SignEncoding::Bitplanes { bypass_sign: true },
+            SignEncoding::TwosComplement { bypass: false },
+            SignEncoding::TwosComplement { bypass: true },
+        ];
+
+        let significant_encodings = [
+            SignificantEncoding::UseMainContext,
+            SignificantEncoding::Bypass,
+        ];
+
+        let neighbour_encodings = [
+            NeighbourEncoding::UseMainContext,
+            NeighbourEncoding::UseOwnContext,
+            NeighbourEncoding::Bypass,
+        ];
+
+        let refinement_encodings = [
+            RefinementEncoding::UseMainContext,
+            RefinementEncoding::UseNeighbourContext,
+            RefinementEncoding::UseOwnContext,
+            RefinementEncoding::Bypass,
+        ];
+
+        let mut configurations = Vec::with_capacity(384);
+
+        for dc_encoding in sign_encodings {
+            for ac_encoding in sign_encodings {
+                for significant_encoding in significant_encodings {
+                    for neighbour_encoding in neighbour_encodings {
+                        for refinement_encoding in refinement_encodings {
+                            configurations.push(BitplaneConfig {
+                                quantisation,
+                                dc_encoding,
+                                ac_encoding,
+                                significant_encoding,
+                                neighbour_encoding,
+                                refinement_encoding,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        configurations
+    }
+
+    /// Create coefficient data with the requested Mallat decomposition.
+    ///
+    /// The input values are assigned across the DC and AC subbands.
+    fn wavelet_data(coefficients: &[i32]) -> WaveletPixelData {
+        assert_eq!(coefficients.len(), TEST_COEFFICIENTS);
+
+        let mut data = WaveletPixelData::empty(TEST_SHAPE, TEST_STAGES);
+        let mut values = coefficients.iter().copied();
+        let mut assigned = 0;
+
+        if let Some(mut dc) = data.dc_subband_mut() {
+            for coefficient in &mut dc {
+                if let Some(value) = values.next() {
+                    *coefficient = value;
+                    assigned += 1;
+                }
+            }
+        }
+
+        let result = data.for_each_ac_subband_mut(|_, mut subband| {
+            for coefficient in &mut subband {
+                if let Some(value) = values.next() {
+                    *coefficient = value;
+                    assigned += 1;
+                }
+            }
+
+            Ok::<(), cabac::Error>(())
+        });
+
+        assert!(result.is_ok(), "Failed to initialise AC subbands");
+        assert_eq!(assigned, coefficients.len());
+        assert!(values.next().is_none());
+
+        data
+    }
+
+    /// Collect all coefficients in a consistent DC-then-AC order.
+    fn coefficient_values(data: &WaveletPixelData) -> Vec<i32> {
+        let mut coefficients = Vec::with_capacity(TEST_COEFFICIENTS);
+
+        if let Some(dc) = data.dc_subband() {
+            coefficients.extend(dc.iter().copied());
+        }
+
+        for stage in data.ac_subbands() {
+            for subband in stage {
+                coefficients.extend(subband.iter().copied());
+            }
+        }
+
+        coefficients
+    }
+
+    /// Encode and decode a stream, checking that the byte counts agree.
+    ///
+    /// The bitdepth passed to the decoder must match the selected sign
+    /// encoding: magnitude bitdepth for bitplanes, two's-complement
+    /// bitdepth for two's-complement encoding.
+    fn encode_decode(
+        input: &BitplanePixelData,
+        config: BitplaneConfig,
+    ) -> Result<BitplanePixelData, TestCaseError> {
+        let dc_bitdepth = match config.dc_encoding {
+            SignEncoding::Bitplanes { .. } => input.dc_bitdepth_magnitude(),
+            SignEncoding::TwosComplement { .. } => {
+                input.dc_bitdepth_twos_complement()
+            }
+        };
+
+        let ac_bitdepth = match config.ac_encoding {
+            SignEncoding::Bitplanes { .. } => input.ac_bitdepth_magnitude(),
+            SignEncoding::TwosComplement { .. } => {
+                input.ac_bitdepth_twos_complement()
+            }
+        };
+
+        let mut bytes = Vec::new();
+
+        {
+            let mut writer = BitWriter::endian(&mut bytes, BigEndian);
+
+            input.encode(&mut writer, config).map_err(|error| {
+                TestCaseError::fail(format!(
+                    "Encoding failed for {config:?}: {error:?}"
+                ))
+            })?;
+
+            writer.byte_align().map_err(|error| {
+                TestCaseError::fail(format!(
+                    "Failed to align encoded stream for {config:?}: {error:?}"
+                ))
+            })?;
+        }
+
+        let bytes_written = bytes.len();
+
+        let mut cursor = Cursor::new(bytes.as_slice());
+
+        let decoded = {
+            let mut reader = BitReader::endian(&mut cursor, BigEndian);
+
+            BitplanePixelData::decode(
+                WaveletPixelData::empty(TEST_SHAPE, TEST_STAGES),
+                &mut reader,
+                config,
+                dc_bitdepth,
+                ac_bitdepth,
+            )
+            .map_err(|error| {
+                TestCaseError::fail(format!(
+                    "Decoding failed for {config:?}: {error:?}"
+                ))
+            })?
+        };
+
+        let bytes_read = usize::try_from(cursor.position()).map_err(|error| {
+            TestCaseError::fail(format!(
+                "Read position does not fit usize: {error}"
+            ))
+        })?;
+
+        if bytes_read != bytes_written {
+            return Err(TestCaseError::fail(format!(
+                "Byte count mismatch for {config:?}: \
+                 wrote {bytes_written} bytes, read {bytes_read} bytes"
+            )));
+        }
+
+        Ok(decoded)
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig {
+            cases: 16,
+            ..ProptestConfig::default()
+        })]
+
+        #[test]
+        fn fixed_zero_quantisation_round_trips(
+            coefficients in prop::collection::vec(any::<i32>(), TEST_COEFFICIENTS)
+        ) {
+            let input = BitplanePixelData::new(
+                wavelet_data(&coefficients)
+            );
+
+            for config in configurations(
+                Quantisation::FixedQuantisation { bits: 0 }
+            ) {
+                let decoded = encode_decode(&input, config)?;
+
+                prop_assert_eq!(
+                    coefficient_values(&decoded.data),
+                    coefficient_values(&input.data),
+                    "Round-trip mismatch for configuration: {:?}",
+                    config
+                );
+            }
+        }
+
+        #[test]
+        fn all_configurations_encode_and_decode_with_quantisation(
+            coefficients in prop::collection::vec(any::<i32>(), TEST_COEFFICIENTS)
+        ) {
+            let input = BitplanePixelData::new(
+                wavelet_data(&coefficients)
+            );
+
+            // Every encoding-option combination is tested with both
+            // quantisation modes. Cycling through 1..=32 covers a range
+            // of non-zero quantisation values without an unnecessarily
+            // large Cartesian product of test cases.
+            for (index, base_config) in configurations(
+                Quantisation::FixedQuantisation { bits: 0 }
+            )
+            .into_iter()
+            .enumerate()
+            {
+                let bits = u8::try_from(index % 32 + 1)
+                    .map_err(|error| {
+                        TestCaseError::fail(format!(
+                            "Invalid test quantisation value: {error}"
+                        ))
+                    })?;
+
+                for quantisation in [
+                    Quantisation::FixedQuantisation { bits },
+                    Quantisation::AdaptiveQuantisation {
+                        base_bits: bits,
+                    },
+                ] {
+                    let config = BitplaneConfig {
+                        quantisation,
+                        ..base_config
+                    };
+
+                    // encode_decode fails the property if either operation
+                    // errors or the number of bytes read differs from the
+                    // number written.
+                    let _decoded = encode_decode(&input, config)?;
+                }
+            }
+        }
+    }
+}

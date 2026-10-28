@@ -59,7 +59,7 @@ fn channel_pixels(image: &RgbImage, channel: usize) -> Array2<i32> {
 /// The whole coefficient array, which is the stage 0 LL band.
 fn full_view(wavelet: &WaveletPixelData) -> ArrayView2<'_, i32> {
     wavelet
-        .get(&MallatSubband {
+        .get(MallatSubband {
             stage: 0,
             subband: WaveletSubband::LL,
         })

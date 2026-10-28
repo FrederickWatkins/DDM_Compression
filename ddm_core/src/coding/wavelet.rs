@@ -1,6 +1,6 @@
 //! Wavelet coding libary
 
-use ndarray::{Array2, ArrayView2, ArrayViewMut, ArrayViewMut1, ArrayViewMut2, Axis, Dimension, Ix2};
+use ndarray::{Array2, ArrayView2, ArrayViewMut, ArrayViewMut1, ArrayViewMut2, Axis, Dimension, Ix2, ShapeBuilder};
 use snafu::{Backtrace, OptionExt, Snafu};
 
 const AC_SUBBAND_ORDER: [WaveletSubband; 3] =
@@ -76,7 +76,8 @@ impl WaveletPixelData {
     }
 
     /// Create new empty encoded pixel data
-    pub fn empty(shape: Ix2, stage: u8) -> Self {
+    pub fn empty<Sh>(shape: Sh, stage: u8) -> Self
+    where Sh: ShapeBuilder<Dim = Ix2>{
         let data = Array2::from_elem(shape, 0);
         Self { stage, data }
     }
