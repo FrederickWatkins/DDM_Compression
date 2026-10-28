@@ -656,7 +656,7 @@ mod tests {
 
     use super::*;
 
-    const TEST_SHAPE: (usize, usize) = (4, 4);
+    const TEST_SHAPE: (usize, usize) = (52, 20);
     const TEST_COEFFICIENTS: usize = TEST_SHAPE.0 * TEST_SHAPE.1;
     const TEST_STAGES: u8 = 2;
 
