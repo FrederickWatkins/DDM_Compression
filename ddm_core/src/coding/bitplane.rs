@@ -118,6 +118,28 @@ pub struct SubbandConfig {
     pub refinement_encoding: RefinementEncoding,
 }
 
+/// How a magnitude bit is coded. Decided only from bits above it, so the decoder can reproduce it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BitClass {
+    /// No higher bit set: this may be the leading 1 (a sign follows if it is)
+    Significant,
+    /// Leading bit is directly above this one
+    Neighbour,
+    /// Everything further below
+    Refinement,
+}
+
+impl BitClass {
+    /// `magnitude` may include bits at or below `bit_idx`; they are ignored
+    fn of(magnitude: u32, bit_idx: u8) -> Self {
+        match u64::from(magnitude) >> (u32::from(bit_idx) + 1) {
+            0 => Self::Significant,
+            1 => Self::Neighbour,
+            _ => Self::Refinement,
+        }
+    }
+}
+
 /// Bitplane enoded pixel data
 pub struct BitplanePixelData {
     data: WaveletPixelData,
@@ -185,32 +207,72 @@ impl BitplanePixelData {
         writer: &mut W,
         config: BitplaneConfig,
     ) -> Result<(), cabac::Error> {
-        todo!()
+        let mut main_ctx = CabacContext::new();
+        let mut neighbour_ctx = CabacContext::new();
+        let mut refinement_ctx = CabacContext::new();
+
+        let mut encoder = CabacEncoder::new(writer);
+
+        if let SignEncoding::TwosComplement { bypass } = config.dc_encoding
+            && let Some(subband) = self.data.dc_subband()
+        {
+            let bitdepth = self.dc_bitdepth_twos_complement();
+            encode_subband_twos_complement(
+                &subband,
+                &mut encoder,
+                &mut main_ctx,
+                bypass,
+                config.quantisation.dc_quantisation(),
+                bitdepth,
+            )?;
+        }
+        if let SignEncoding::TwosComplement { bypass } = config.ac_encoding {
+            let bitdepth = self.ac_bitdepth_twos_complement();
+            for (i, stage) in self.data.ac_subbands().enumerate() {
+                for subband in stage {
+                    #[expect(clippy::cast_possible_truncation, reason = "Stage can't be above u8")]
+                    encode_subband_twos_complement(
+                        &subband,
+                        &mut encoder,
+                        &mut main_ctx,
+                        bypass,
+                        config.quantisation.ac_quantisation(i as u8),
+                        bitdepth,
+                    )?;
+                }
+            }
+        }
+        for bit_idx in (0..=32).rev() {
+            self.encode_bitplane(bit_idx, &mut encoder, &mut main_ctx, &mut neighbour_ctx, &mut refinement_ctx, config)?;
+        }
+        encoder.encode_flush()?;
+        Ok(())
     }
 
     /// Encode bitplane `bit_idx` to encoder
     ///
     /// # Errors
     /// Passes up errors from encoder
-    pub fn encode_bitplane<W: BitWrite>(
+    fn encode_bitplane<W: BitWrite>(
         &self,
         bit_idx: u8,
         encoder: &mut CabacEncoder<W>,
-        main_context: &mut CabacContext,
-        neighbour_context: &mut CabacContext,
-        refinement_context: &mut CabacContext,
+        main_ctx: &mut CabacContext,
+        neighbour_ctx: &mut CabacContext,
+        refinement_ctx: &mut CabacContext,
         config: BitplaneConfig,
     ) -> Result<(), cabac::Error> {
         if let Some(subband) = self.data.dc_subband()
             && let SignEncoding::Bitplanes { bypass_sign } = config.dc_encoding
+            && bit_idx < self.dc_bitdepth_magnitude()
         {
             encode_subband_bitplane(
                 &subband,
                 bit_idx,
                 encoder,
-                main_context,
-                neighbour_context,
-                refinement_context,
+                main_ctx,
+                neighbour_ctx,
+                refinement_ctx,
                 SubbandConfig {
                     bypass_sign,
                     quantisation: config.quantisation.dc_quantisation(),
@@ -220,7 +282,7 @@ impl BitplanePixelData {
                 },
             )?;
         }
-        if let SignEncoding::Bitplanes { bypass_sign } = config.ac_encoding {
+        if let SignEncoding::Bitplanes { bypass_sign } = config.ac_encoding && bit_idx < self.ac_bitdepth_magnitude() {
             for (i, stage) in self.data.ac_subbands().enumerate() {
                 for subband in stage {
                     #[expect(clippy::cast_possible_truncation, reason = "Stage can't be above u8")]
@@ -228,9 +290,9 @@ impl BitplanePixelData {
                         &subband,
                         bit_idx,
                         encoder,
-                        main_context,
-                        neighbour_context,
-                        refinement_context,
+                        main_ctx,
+                        neighbour_ctx,
+                        refinement_ctx,
                         SubbandConfig {
                             bypass_sign,
                             quantisation: config.quantisation.ac_quantisation(i as u8),
@@ -249,6 +311,9 @@ impl BitplanePixelData {
 /// Get minimum number of bits to represent `x` in two's complement
 #[expect(clippy::cast_possible_truncation, reason = "Bit length is at most 32")]
 fn twos_complement_bitdepth(x: i32) -> u8 {
+    if x == 0{
+        return 0;
+    }
     let sign_run = x.leading_zeros().max(x.leading_ones());
     (i32::BITS + 1 - sign_run) as u8
 }
@@ -264,9 +329,9 @@ fn encode_subband_bitplane<W: BitWrite>(
     subband: &ArrayView2<i32>,
     bit_idx: u8,
     encoder: &mut CabacEncoder<W>,
-    main_context: &mut CabacContext,
-    neighbour_context: &mut CabacContext,
-    refinement_context: &mut CabacContext,
+    main_ctx: &mut CabacContext,
+    neighbour_ctx: &mut CabacContext,
+    refinement_ctx: &mut CabacContext,
     config: SubbandConfig,
 ) -> Result<(), cabac::Error> {
     if bit_idx < config.quantisation {
@@ -277,9 +342,9 @@ fn encode_subband_bitplane<W: BitWrite>(
             *pixel,
             bit_idx,
             encoder,
-            main_context,
-            neighbour_context,
-            refinement_context,
+            main_ctx,
+            neighbour_ctx,
+            refinement_ctx,
             config,
         )?;
     }
@@ -290,45 +355,45 @@ fn encode_subband_pixel<W: BitWrite>(
     pixel: i32,
     bit_idx: u8,
     encoder: &mut CabacEncoder<W>,
-    main_context: &mut CabacContext,
-    neighbour_context: &mut CabacContext,
-    refinement_context: &mut CabacContext,
+    main_ctx: &mut CabacContext,
+    neighbour_ctx: &mut CabacContext,
+    refinement_ctx: &mut CabacContext,
     config: SubbandConfig,
 ) -> Result<(), cabac::Error> {
-    let bit_value = (pixel.unsigned_abs() >> config.quantisation) >> bit_idx == 1;
+    let bit_value = (pixel.unsigned_abs() >> bit_idx) & 1 == 1;
     let pixel_sign = pixel < 0;
     if bit_is_significant(pixel, bit_idx) {
         match config.significant_encoding {
             SignificantEncoding::UseMainContext => {
-                encoder.encode_decision(bit_value, main_context)?;
+                encoder.encode_decision(bit_value, main_ctx)?;
             }
             SignificantEncoding::Bypass => encoder.encode_bypass(bit_value)?,
         }
         if config.bypass_sign {
             encoder.encode_bypass(pixel_sign)?;
         } else {
-            encoder.encode_decision(pixel_sign, main_context)?;
+            encoder.encode_decision(pixel_sign, main_ctx)?;
         }
     } else if bit_is_neighbour(pixel, bit_idx) {
         match config.neighbour_encoding {
             NeighbourEncoding::UseMainContext => {
-                encoder.encode_decision(bit_value, main_context)?;
+                encoder.encode_decision(bit_value, main_ctx)?;
             }
             NeighbourEncoding::UseOwnContext => {
-                encoder.encode_decision(bit_value, neighbour_context)?;
+                encoder.encode_decision(bit_value, neighbour_ctx)?;
             }
             NeighbourEncoding::Bypass => encoder.encode_bypass(bit_value)?,
         }
     } else {
         match config.refinement_encoding {
             RefinementEncoding::UseMainContext => {
-                encoder.encode_decision(bit_value, main_context)?;
+                encoder.encode_decision(bit_value, main_ctx)?;
             }
             RefinementEncoding::UseNeighbourContext => {
-                encoder.encode_decision(bit_value, neighbour_context)?;
+                encoder.encode_decision(bit_value, neighbour_ctx)?;
             }
             RefinementEncoding::UseOwnContext => {
-                encoder.encode_decision(bit_value, refinement_context)?;
+                encoder.encode_decision(bit_value, refinement_ctx)?;
             }
             RefinementEncoding::Bypass => encoder.encode_bypass(bit_value)?,
         }
@@ -342,4 +407,25 @@ fn bit_is_significant(pixel: i32, bit_idx: u8) -> bool {
 
 fn bit_is_neighbour(pixel: i32, bit_idx: u8) -> bool {
     pixel.unsigned_abs().checked_ilog2().unwrap_or(0) < u32::from(bit_idx)
+}
+
+fn encode_subband_twos_complement<W: BitWrite>(
+    subband: &ArrayView2<i32>,
+    encoder: &mut CabacEncoder<W>,
+    main_ctx: &mut CabacContext,
+    bypass: bool,
+    quantisation: u8,
+    bitdepth: u8,
+) -> Result<(), cabac::Error> {
+    for pixel in subband {
+        for bit_idx in (quantisation..bitdepth).rev() {
+            let bit_val = (pixel >> bit_idx) & 1 == 1;
+            if bypass {
+                encoder.encode_bypass(bit_val)?;
+            } else {
+                encoder.encode_decision(bit_val, main_ctx)?;
+            }
+        }
+    }
+    Ok(())
 }
