@@ -6,6 +6,7 @@ pub mod wavelet;
 pub use wavelet::WaveletPixelData;
 
 pub mod bitplane;
+pub use bitplane::{BitplaneConfig, BitplanePixelData};
 
 #[cfg(test)]
 mod tests {

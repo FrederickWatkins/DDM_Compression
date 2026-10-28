@@ -119,7 +119,7 @@ pub struct SubbandConfig {
 }
 
 /// How a magnitude bit is coded. Decided only from bits above it, so the decoder can reproduce it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum BitClass {
     /// No higher bit set: this may be the leading 1 (a sign follows if it is)
     Significant,
@@ -141,6 +141,7 @@ impl BitClass {
 }
 
 /// Bitplane enoded pixel data
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BitplanePixelData {
     data: WaveletPixelData,
 }
@@ -152,8 +153,7 @@ impl BitplanePixelData {
     }
 
     /// Consume the bitplane data and return its wavelet coefficients
-    #[cfg(test)]
-    pub(super) fn into_wavelet_data(self) -> WaveletPixelData {
+    pub fn into_wavelet_data(self) -> WaveletPixelData {
         self.data
     }
 

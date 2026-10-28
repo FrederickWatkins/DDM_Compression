@@ -63,7 +63,7 @@ pub struct MallatSubband {
 }
 
 /// Pixel data in wavelet coded format
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WaveletPixelData {
     stage: u8,
     data: Array2<i32>,
