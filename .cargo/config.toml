@@ -3,3 +3,6 @@ PROPTEST_CASES = "10"
 
 [build]
 rustflags = ["-C", "target-cpu=native"]
+
+[alias]
+xtask = "run --package xtask --"
