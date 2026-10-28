@@ -3,21 +3,15 @@
 use ndarray::{Array2, ArrayView2, ArrayViewMut, ArrayViewMut1, ArrayViewMut2, Axis, Dimension};
 use snafu::{Backtrace, OptionExt, Snafu};
 
+const AC_SUBBAND_ORDER: [WaveletSubband; 3] = [
+    WaveletSubband::LH,
+    WaveletSubband::HL,
+    WaveletSubband::HH,
+];
+
 /// Wavelet coding error types
 #[derive(Snafu, Debug)]
 pub enum Error {
-    /// Attempted to get/transform a stage higher than the current encoding stage
-    #[snafu(display(
-        "Requested stage {requested_stage} from pixel data, but current transformed stage is only {pixel_data_stage}"
-    ))]
-    StageTooHigh {
-        /// Stage requested by function
-        requested_stage: usize,
-        /// Current stage of pixel data
-        pixel_data_stage: usize,
-        /// Error backtrace
-        backtrace: Backtrace,
-    },
     /// Attempted to transform when stage too low to perform transform
     #[snafu(display("Attempted to inverse transform data that is already raw"))]
     InvertRaw {
@@ -63,7 +57,7 @@ impl WaveletSubband {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct MallatSubband {
     /// Decomposition stage
-    pub stage: usize,
+    pub stage: u8,
     /// Frequency subband
     pub subband: WaveletSubband,
 }
@@ -71,7 +65,7 @@ pub struct MallatSubband {
 /// Pixel data in wavelet coded format
 #[derive(Debug, Clone)]
 pub struct WaveletPixelData {
-    stage: usize,
+    stage: u8,
     data: Array2<i32>,
 }
 
@@ -82,6 +76,33 @@ impl WaveletPixelData {
     pub fn new(data: Array2<i32>) -> Self {
         let stage = 0;
         Self { stage, data }
+    }
+
+    /// Current stage
+    pub fn stage(&self) -> u8 {
+        self.stage
+    }
+
+    /// Get DC subband; so only the highest order LL subband
+    ///
+    /// Returns none if empty
+    pub fn dc_subband(&self) -> Option<ArrayView2<'_, i32>> {
+        self.get(&MallatSubband {stage: self.stage, subband: WaveletSubband::LL})
+    }
+    
+    /// Returns parents first, then children, grandchildren etc; so higehst stage first
+    pub fn ac_subbands(&self) -> impl Iterator<Item = impl Iterator<Item = ArrayView2<'_, i32>>>
+    {
+        (1..self.stage).rev().filter_map(move |stage| self.stage_ac_subbands(stage))
+    }
+
+    /// AC (LH, HL, HH) subbands for a particular stage
+    ///
+    /// Returns none if the `stage` is zero or larger than the data's current stage.
+    pub fn stage_ac_subbands(&self, stage: u8) -> Option<impl Iterator<Item = ArrayView2<'_, i32>>> {
+        let subbands = AC_SUBBAND_ORDER.map(|subband| MallatSubband {stage,  subband});
+        let [a, b, c] = subbands.map(|subband| self.get(&subband));
+        Some([a?, b?, c?].into_iter())
     }
 
     /// Apply a single stage dwt to `subband`
