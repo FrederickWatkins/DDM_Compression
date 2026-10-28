@@ -176,10 +176,8 @@ fn next_visible_token(tokens: &[SymbolToken<'_>], mut index: usize) -> Option<us
 ///
 /// Examples:
 ///
-/// - `crate[0123456789abcdef]::module::function`
-///   becomes `crate::module::function`.
-/// - `module::lift::<module::highpass_53>`
-///   becomes `module::lift`.
+/// - `crate[0123456789abcdef]::module::function` becomes `crate::module::function`.
+/// - `module::lift::<module::highpass_53>` becomes `module::lift`.
 ///
 /// ANSI colour sequences are preserved even when they occur inside text
 /// being removed, so that later text is still coloured correctly.
