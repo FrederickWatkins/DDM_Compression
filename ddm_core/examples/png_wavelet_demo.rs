@@ -13,7 +13,6 @@ use ddm_core::coding::wavelet::{MallatSubband, WaveletPixelData, WaveletSubband}
 use image::{GenericImage, Rgb, RgbImage};
 use ndarray::{Array2, ArrayView2};
 
-/// Detail coefficients are small and centred on zero, so they are amplified for display.
 const MAX_STAGES: usize = 3;
 const CHANNELS: usize = 3;
 
@@ -43,7 +42,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let combined = side_by_side(original, renders)?;
     let output = output_path(&input, "all");
-    combined.save(&output)?;
+    // combined.save(&output)?;
     println!("wrote {}", output.display());
     Ok(())
 }

@@ -456,7 +456,7 @@ fn encode_subband_bitplane<W: BitWrite>(
         return Ok(());
     }
     for pixel in subband {
-        encode_subband_pixel(
+        encode_pixel_bitplane(
             *pixel,
             bit_idx,
             encoder,
@@ -482,7 +482,7 @@ fn decode_subband_bitplane<R: BitRead>(
         return Ok(());
     }
     for pixel in subband.iter_mut() {
-        decode_subband_pixel(
+        decode_pixel_bitplane(
             pixel,
             bit_idx,
             decoder,
@@ -495,7 +495,7 @@ fn decode_subband_bitplane<R: BitRead>(
     Ok(())
 }
 
-fn encode_subband_pixel<W: BitWrite>(
+fn encode_pixel_bitplane<W: BitWrite>(
     pixel: i32,
     bit_idx: u8,
     encoder: &mut CabacEncoder<W>,
@@ -549,7 +549,7 @@ fn encode_subband_pixel<W: BitWrite>(
     Ok(())
 }
 
-fn decode_subband_pixel<R: BitRead>(
+fn decode_pixel_bitplane<R: BitRead>(
     pixel: &mut i32,
     bit_idx: u8,
     decoder: &mut CabacDecoder<R>,
