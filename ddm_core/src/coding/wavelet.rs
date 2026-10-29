@@ -87,6 +87,11 @@ impl WaveletPixelData {
         Self { stage, data }
     }
 
+    /// Get inner Array2
+    pub fn into_inner(self) -> Array2<i32> {
+        self.data
+    }
+
     /// Current stage
     pub fn stage(&self) -> u8 {
         self.stage

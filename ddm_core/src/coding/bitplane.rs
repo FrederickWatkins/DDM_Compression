@@ -212,28 +212,31 @@ impl BitplanePixelData {
         &self,
         writer: &mut W,
         config: BitplaneConfig,
-    ) -> Result<(), cabac::Error> {
+    ) -> Result<(u8, u8), cabac::Error> {
         let mut main_ctx = CabacContext::new();
         let mut neighbour_ctx = CabacContext::new();
         let mut refinement_ctx = CabacContext::new();
 
         let mut encoder = CabacEncoder::new(writer);
 
+        let mut dc_bitdepth = self.dc_bitdepth_magnitude();
+        let mut ac_bitdepth = self.ac_bitdepth_magnitude();
+
         if let SignEncoding::TwosComplement { bypass } = config.dc_encoding
             && let Some(subband) = self.data.dc_subband()
         {
-            let bitdepth = self.dc_bitdepth_twos_complement();
+            dc_bitdepth = self.dc_bitdepth_twos_complement();
             encode_subband_twos_complement(
                 &subband,
                 &mut encoder,
                 &mut main_ctx,
                 bypass,
                 config.quantisation.dc_quantisation(),
-                bitdepth,
+                dc_bitdepth,
             )?;
         }
         if let SignEncoding::TwosComplement { bypass } = config.ac_encoding {
-            let bitdepth = self.ac_bitdepth_twos_complement();
+            ac_bitdepth = self.ac_bitdepth_twos_complement();
             for (i, stage) in self.data.ac_subbands().enumerate() {
                 for subband in stage {
                     #[expect(clippy::cast_possible_truncation, reason = "Stage can't be above u8")]
@@ -243,7 +246,7 @@ impl BitplanePixelData {
                         &mut main_ctx,
                         bypass,
                         config.quantisation.ac_quantisation(i as u8),
-                        bitdepth,
+                        ac_bitdepth,
                     )?;
                 }
             }
@@ -259,7 +262,7 @@ impl BitplanePixelData {
             )?;
         }
         encoder.encode_flush()?;
-        Ok(())
+        Ok((dc_bitdepth, ac_bitdepth))
     }
 
     /// Decode from the provided reader

@@ -12,6 +12,8 @@ use backtrace::install_error_reporting as install_eyre_hook;
 mod dwt_image;
 use dwt_image::FrameWriter;
 
+mod benchmark;
+
 use crate::dwt_image::{CHANNELS, DEFAULT_DUMP_EVERY, STAGES, channel_pixels, dwt_mallat_lockstep};
 
 fn main() -> eyre::Result<()> {
