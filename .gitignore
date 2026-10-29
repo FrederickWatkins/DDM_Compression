@@ -2,4 +2,9 @@
 /data
 *.csv
 *.png
-
+/images
+/media
+/.mypy_cache
+/.ruff_cache
+__pycache__
+*.mp4

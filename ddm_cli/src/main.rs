@@ -1,103 +1,76 @@
 //! DDM CLI tools
+#![allow(dead_code, reason = "Might use in future")]
+use std::env;
 
-use std::io::{BufReader, Cursor, Seek, SeekFrom};
-
-use binrw::{BinRead as _, Endian};
-use bitstream_io::{BigEndian, BitWriter};
-use ddm_core::{
-    coding::{
-        BitplaneConfig, BitplanePixelData, WaveletPixelData, bitplane,
-        wavelet::{MallatSubband, WaveletSubband, dwt_53_nd},
-    },
-    l0b::{DDMDecoder, L0bPacket, MP00Decoder, mp00::encode_pixel_data},
-};
+use color_eyre::eyre;
+use ddm_core::coding::WaveletPixelData;
 use ndarray::Array2;
 
 mod backtrace;
-
 use backtrace::install_error_reporting as install_eyre_hook;
 
-fn main() -> color_eyre::eyre::Result<()> {
-    install_eyre_hook()?;
-    let max_packets = 512;
+mod dwt_image;
+use dwt_image::FrameWriter;
 
-    let config = BitplaneConfig {
-        quantisation: bitplane::Quantisation::FixedQuantisation { bits: 0 },
-        dc_encoding: bitplane::SignEncoding::TwosComplement { bypass: true },
-        ac_encoding: bitplane::SignEncoding::Bitplanes { bypass_sign: true },
-        significant_encoding: bitplane::SignificantEncoding::UseMainContext,
-        neighbour_encoding: bitplane::NeighbourEncoding::UseOwnContext,
-        refinement_encoding: bitplane::RefinementEncoding::Bypass,
+use crate::dwt_image::{CHANNELS, DEFAULT_DUMP_EVERY, STAGES, channel_pixels, dwt_mallat_lockstep};
+
+fn main() -> eyre::Result<()> {
+    install_eyre_hook()?;
+
+    let mut args = env::args().skip(1);
+    let input = args
+        .next()
+        .ok_or(eyre::eyre!("usage: wavelet_demo <input.png> [dump_every]"))?;
+    let dump_every = match args.next() {
+        Some(n) => n.parse()?,
+        None => DEFAULT_DUMP_EVERY,
     };
 
-    let file = std::fs::File::open("data/L0b/HG1_003014_20260829_102905.l0b.ddm")?;
-    let mut reader = BufReader::new(file);
-    let mut decoder = MP00Decoder::new();
-    let mut frames = vec![];
-    let mut buf = vec![];
-    let mut cursor = Cursor::new(&mut buf);
-    let mut bitwriter = BitWriter::<_, BigEndian>::new(&mut cursor);
-    let mut buf2 = vec![];
-    let mut cursor2 = Cursor::new(&mut buf2);
-
-    for _ in 0..max_packets {
-        let current_pos = reader.stream_position()?;
-        let end_pos = reader.seek(SeekFrom::End(0))?;
-
-        if current_pos == end_pos {
-            break;
-        }
-        reader.seek(SeekFrom::Start(current_pos))?;
-        let packet = L0bPacket::read_options(&mut reader, Endian::Big, (52, 20))?;
-        match packet {
-            L0bPacket::MP00(mp00_packet) => {
-                frames.push(decoder.decode(mp00_packet)?.pixel_data().to_owned())
-            }
-            L0bPacket::MT00(_) => (),
-        }
-    }
-
-    let frame = &frames[211];
-
-    encode_pixel_data(&mut cursor2, &frame.view())?;
-
-    let mut all_values: Vec<_> = frames
-        .iter()
-        .flat_map(|frame| frame.iter().copied())
+    let original = image::open(&input)?.to_rgb8();
+    let mut channels: Vec<_> = (0..CHANNELS)
+        .map(|c| WaveletPixelData::new(channel_pixels(&original, c)))
         .collect();
 
-    if !all_values.is_empty() {
-        // Find the index corresponding to the 99th percentile
-        let idx = ((all_values.len() as f64) * 0.999).floor() as usize;
+    let mut frames = FrameWriter::new("images", dump_every)?;
+    frames.dump(&channels)?; // untransformed starting frame
+    dwt_mallat_lockstep(&mut channels, STAGES, |chs| frames.on_lane(chs))?;
+    frames.dump(&channels)?; // fully transformed final frame
 
-        // Use select_nth_unstable for O(N) linear-time selection without a full sort
-        let (_, &mut p99, _) = all_values.select_nth_unstable(idx);
-
-        println!("99th percentile pixel value: {}", p99);
-    }
-
-    println!("Encoded length (legacy): {}", buf2.len());
-
-    let mut wavelet_pixels = WaveletPixelData::new(frame.mapv(i32::from));
-    let mean = wavelet_pixels
-        .get(MallatSubband {
-            stage: 0,
-            subband: WaveletSubband::LL,
-        })
-        .unwrap()
-        .mean()
-        .unwrap();
-    // wavelet_pixels
-    //     .get_mut(MallatSubband {
-    //         stage: 0,
-    //         subband: WaveletSubband::LL,
-    //     })
-    //     .unwrap()
-    //     .map_inplace(|x| *x = *x - mean);
-    wavelet_pixels.dwt_mallat(2)?;
-    let bitplanes = BitplanePixelData::new(wavelet_pixels);
-    bitplanes.encode(&mut bitwriter, config)?;
-    println!("Encoded length (experimental): {}", buf.len());
-
+    println!("wrote {} frames to images/", frames.files_written);
     Ok(())
+}
+
+fn print_ndarray_8bit(arr: &Array2<u16>) {
+    let (rows, cols) = arr.dim();
+
+    // Iterate through rows with a step of 2 to pair vertical pixels using '▀'
+    let mut r = 0;
+    while r < rows {
+        for c in 0..cols {
+            let top_val = arr[[r, c]];
+            let top_color = map_to_8bit(top_val);
+
+            if r + 1 < rows {
+                let bot_val = arr[[r + 1, c]];
+                let bot_color = map_to_8bit(bot_val);
+
+                // \x1b[38;5;{n}m sets foreground color (top half)
+                // \x1b[48;5;{n}m sets background color (bottom half)
+                print!("\x1b[38;5;{top_color}m\x1b[48;5;{bot_color}m▀");
+            } else {
+                // Handle odd-numbered total row count
+                print!("\x1b[38;5;{top_color}m▀");
+            }
+        }
+        // Reset terminal colors at the end of the line
+        println!("\x1b[0m");
+        r += 2;
+    }
+}
+
+/// Maps a u16 value between 0 and 2048 to an 8-bit ANSI color code (0-255)
+#[expect(clippy::cast_possible_truncation, reason = "Value is clamped")]
+fn map_to_8bit(val: u16) -> u8 {
+    let normalized = val.min(4096) / (4096 / 256);
+    normalized as u8
 }

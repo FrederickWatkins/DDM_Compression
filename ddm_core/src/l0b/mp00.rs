@@ -53,9 +53,7 @@ impl MP00Encoder {
     }
 }
 
-impl DDMEncoder
-    for MP00Encoder
-{
+impl DDMEncoder for MP00Encoder {
     type Packet = MP00Packet;
 
     fn encode(&mut self, frame: DDMFrame) -> Result<Self::Packet, Error> {
@@ -85,9 +83,7 @@ impl MP00Decoder {
     }
 }
 
-impl DDMDecoder
-    for MP00Decoder
-{
+impl DDMDecoder for MP00Decoder {
     type Packet = MP00Packet;
 
     fn decode(&mut self, packet: Self::Packet) -> Result<DDMFrame, Error> {
@@ -167,7 +163,7 @@ impl BinRead for MP00Packet {
                 err: Box::new(Error::CrcMismatch {
                     calculated_crc,
                     actual_crc: crc,
-                    backtrace: Backtrace::new()
+                    backtrace: Backtrace::new(),
                 }),
             });
         }
@@ -255,9 +251,7 @@ impl WriteEndian for MP00Packet {
 }
 
 #[cfg(test)]
-impl proptest::arbitrary::Arbitrary
-    for MP00Packet
-{
+impl proptest::arbitrary::Arbitrary for MP00Packet {
     type Parameters = (usize, usize);
     type Strategy = proptest::strategy::BoxedStrategy<Self>;
 
@@ -267,7 +261,10 @@ impl proptest::arbitrary::Arbitrary
             .prop_flat_map(move |header| {
                 (
                     Just(header),
-                    proptest::collection::vec(any::<u16>(), parameters.0.saturating_mul(parameters.1)),
+                    proptest::collection::vec(
+                        any::<u16>(),
+                        parameters.0.saturating_mul(parameters.1),
+                    ),
                 )
             })
             .prop_filter_map(
@@ -285,6 +282,9 @@ impl proptest::arbitrary::Arbitrary
 /// Decode pixel data using sign extended VRQ format
 ///
 /// Returns pixel data and number of bytes read
+///
+/// # Errors
+/// If VRQ decoding fails
 pub fn decode_pixel_data<R: Read, Sh>(
     reader: &mut R,
     shape: Sh,
@@ -305,6 +305,9 @@ where
 /// Encode pixel data using sign extended VRQ format
 ///
 /// Returns number of bytes written
+///
+/// # Errors
+/// If VRQ decoding fails
 pub fn encode_pixel_data<W: Write>(
     writer: &mut W,
     pixel_data: &ArrayView2<u16>,

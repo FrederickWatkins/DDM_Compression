@@ -207,10 +207,6 @@ impl WaveletPixelData {
 
     /// Get subband
     pub fn get(&self, subband: MallatSubband) -> Option<ArrayView2<'_, i32>> {
-        if subband.stage > self.stage {
-            return None;
-        }
-
         let (rows, cols) = self.data.dim();
         let div = 1usize << subband.stage;
         let ll_rows = rows.div_ceil(div);
@@ -232,10 +228,6 @@ impl WaveletPixelData {
 
     /// Get subband mutably
     pub fn get_mut(&mut self, subband: MallatSubband) -> Option<ArrayViewMut2<'_, i32>> {
-        if subband.stage > self.stage {
-            return None;
-        }
-
         let (rows, cols) = self.data.dim();
         let div = 1usize << subband.stage;
         let ll_rows = rows.div_ceil(div);

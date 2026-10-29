@@ -6,7 +6,7 @@ use binrw::{BinRead, BinResult, BinWrite, Endian};
 use ndarray::{Array2, ArrayView2};
 use snafu::{Backtrace, Snafu};
 
-use crate::{coding::{cabac, wavelet}};
+use crate::coding::{cabac, wavelet};
 
 pub mod mp00;
 pub use mp00::{MP00Decoder, MP00Encoder, MP00EncoderConfig, MP00Header, MP00Packet};
@@ -46,7 +46,6 @@ pub enum Error {
         /// Error backtrace
         backtrace: Backtrace,
     },
-
 }
 
 /// An encoder capable of turning [`DDMFrame`]s into a packets
@@ -191,9 +190,7 @@ impl DDMFrame {
 }
 
 #[cfg(test)]
-impl proptest::arbitrary::Arbitrary
-    for DDMFrame
-{
+impl proptest::arbitrary::Arbitrary for DDMFrame {
     type Parameters = (usize, usize);
     type Strategy = proptest::strategy::BoxedStrategy<Self>;
 
@@ -204,7 +201,10 @@ impl proptest::arbitrary::Arbitrary
             .prop_flat_map(move |metadata| {
                 (
                     Just(metadata),
-                    proptest::collection::vec(any::<u16>(), parameters.1.saturating_mul(parameters.0)),
+                    proptest::collection::vec(
+                        any::<u16>(),
+                        parameters.1.saturating_mul(parameters.0),
+                    ),
                 )
             })
             .prop_filter_map(
@@ -236,16 +236,16 @@ pub enum L0bPacket {
     MT00(MT00Packet),
 }
 
-impl From<MP00Packet>
-    for L0bPacket
-{
+impl From<MP00Packet> for L0bPacket {
     fn from(value: MP00Packet) -> Self {
         Self::MP00(value)
     }
 }
 
 impl BinRead for L0bPacket {
-    type Args<'a> = (usize, usize); // Adjust this to match whatever arguments your packets require
+    type Args<'a> = (usize, usize);
+
+    // Adjust this to match whatever arguments your packets require
 
     fn read_options<R: Read + Seek>(
         reader: &mut R,
@@ -253,7 +253,8 @@ impl BinRead for L0bPacket {
         args: Self::Args<'_>,
     ) -> BinResult<Self> {
         // 1. Read and verify the top-level enum magic (0xCA75_0200u32)
-        // Since your attributes specified `big`, you can pass Endian::Big or respect the passed `endian`.
+        // Since your attributes specified `big`, you can pass Endian::Big or respect the passed
+        // `endian`.
         let magic = u32::read_options(reader, endian, ())?;
         if magic != 0xCA75_0200u32 {
             return Err(binrw::Error::BadMagic {
