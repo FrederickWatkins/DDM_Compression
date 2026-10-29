@@ -689,6 +689,7 @@ dependencies = [
  "ddm_core",
  "duckdb",
  "image",
+ "itertools 0.15.0",
  "ndarray",
  "regex",
  "snafu",

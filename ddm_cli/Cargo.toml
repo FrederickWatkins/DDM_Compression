@@ -17,6 +17,7 @@ binrw = "0.15.2"
 bitstream-io = "4.10.0"
 duckdb = "1.20000.1"
 colorous = "1.0.16"
+itertools = "0.15.0"
 
 [lints]
 workspace = true

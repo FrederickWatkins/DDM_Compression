@@ -767,20 +767,11 @@ mod tests {
         stages: usize,
         config: BitplaneConfig,
     ) -> Result<(BitplanePixelData, usize, usize), TestCaseError> {
-        let dc_bitdepth = match config.dc_encoding {
-            SignEncoding::Bitplanes { .. } => input.dc_bitdepth_magnitude(),
-            SignEncoding::TwosComplement { .. } => input.dc_bitdepth_twos_complement(),
-        };
-
-        let ac_bitdepth = match config.ac_encoding {
-            SignEncoding::Bitplanes { .. } => input.ac_bitdepth_magnitude(),
-            SignEncoding::TwosComplement { .. } => input.ac_bitdepth_twos_complement(),
-        };
-
         let mut bytes = Vec::new();
+        let (dc_bitdepth, ac_bitdepth);
         {
             let mut writer = BitWriter::endian(&mut bytes, BigEndian);
-            input
+            (dc_bitdepth, ac_bitdepth) = input
                 .encode(&mut writer, config)
                 .map_err(|error| TestCaseError::fail(format!("Encoding failed: {error:?}")))?;
             writer.byte_align().map_err(|error| {
