@@ -13,6 +13,9 @@ ndarray = "0.17.2"
 snafu = { version = "0.9", features = ["backtraces-impl-backtrace-crate"] }
 color-backtrace = "0.7"
 regex = "1"
+binrw = "0.15.2"
+bitstream-io = "4.10.0"
+duckdb = "1.20000.1"
 
 [lints]
 workspace = true

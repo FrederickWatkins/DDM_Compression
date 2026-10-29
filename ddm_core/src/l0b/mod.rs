@@ -1,14 +1,16 @@
 //! L0b DDM Formats
 
-use binrw::{BinRead, BinWrite};
+use std::io::{Read, Seek};
+
+use binrw::{BinRead, BinResult, BinWrite, Endian};
 use ndarray::{Array2, ArrayView2};
 use snafu::{Backtrace, Snafu};
 
 use crate::{coding::{cabac, wavelet}};
 
-mod mp00;
+pub mod mp00;
 pub use mp00::{MP00Decoder, MP00Encoder, MP00EncoderConfig, MP00Header, MP00Packet};
-mod mt00;
+pub mod mt00;
 pub use mt00::MT00Packet;
 
 /// DDM encoding error types
@@ -218,7 +220,7 @@ impl proptest::arbitrary::Arbitrary
 }
 
 /// A generic L0b packet of any kind
-#[derive(BinRead, BinWrite, Debug, Clone, PartialEq, Eq)]
+#[derive(BinWrite, Debug, Clone, PartialEq, Eq)]
 #[brw(big, magic = 0xCA75_0200u32)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(test, derive(proptest_derive::Arbitrary))]
@@ -239,6 +241,45 @@ impl From<MP00Packet>
 {
     fn from(value: MP00Packet) -> Self {
         Self::MP00(value)
+    }
+}
+
+impl BinRead for L0bPacket {
+    type Args<'a> = (usize, usize); // Adjust this to match whatever arguments your packets require
+
+    fn read_options<R: Read + Seek>(
+        reader: &mut R,
+        endian: Endian,
+        args: Self::Args<'_>,
+    ) -> BinResult<Self> {
+        // 1. Read and verify the top-level enum magic (0xCA75_0200u32)
+        // Since your attributes specified `big`, you can pass Endian::Big or respect the passed `endian`.
+        let magic = u32::read_options(reader, endian, ())?;
+        if magic != 0xCA75_0200u32 {
+            return Err(binrw::Error::BadMagic {
+                pos: reader.stream_position()? - 4,
+                found: Box::new(magic),
+            });
+        }
+
+        // 2. Read the variant magic bytes (e.g., b"MP00", b"MT00")
+        let variant_magic = <[u8; 4]>::read_options(reader, endian, ())?;
+
+        // 3. Match the variant magic and parse the inner packet, forwarding `args`
+        match &variant_magic {
+            b"MP00" => {
+                let packet = MP00Packet::read_options(reader, endian, args)?;
+                Ok(Self::MP00(packet))
+            }
+            b"MT00" => {
+                let packet = MT00Packet::read_options(reader, endian, ())?;
+                Ok(Self::MT00(packet))
+            }
+            other => Err(binrw::Error::BadMagic {
+                pos: reader.stream_position()? - 4,
+                found: Box::new(*other),
+            }),
+        }
     }
 }
 

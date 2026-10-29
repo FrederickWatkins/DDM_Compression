@@ -285,7 +285,7 @@ impl proptest::arbitrary::Arbitrary
 /// Decode pixel data using sign extended VRQ format
 ///
 /// Returns pixel data and number of bytes read
-fn decode_pixel_data<R: Read, Sh>(
+pub fn decode_pixel_data<R: Read, Sh>(
     reader: &mut R,
     shape: Sh,
 ) -> Result<Array2<u16>, binrw::io::Error>
