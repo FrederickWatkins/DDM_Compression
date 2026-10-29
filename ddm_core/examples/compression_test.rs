@@ -19,14 +19,14 @@ use rand::{Rng, RngExt as _, SeedableRng, rngs::StdRng};
 fn main() {
     let mut rng = StdRng::seed_from_u64(42);
     let config = BitplaneConfig {
-        quantisation: bitplane::Quantisation::FixedQuantisation { bits: 0 },
-        dc_encoding: bitplane::SignEncoding::Bitplanes { bypass_sign: true },
+        quantisation: bitplane::Quantisation::AdaptiveQuantisation { base_bits: 1 },
+        dc_encoding: bitplane::SignEncoding::TwosComplement { bypass: true },
         ac_encoding: bitplane::SignEncoding::Bitplanes { bypass_sign: true },
         significant_encoding: bitplane::SignificantEncoding::UseMainContext,
         neighbour_encoding: bitplane::NeighbourEncoding::UseOwnContext,
         refinement_encoding: bitplane::RefinementEncoding::Bypass,
     };
-    let raw_data = Array2::from_shape_fn((52, 20), |_| rng.random_range(1000..=1500));
+    let raw_data = Array2::from_shape_fn((52, 20), |_| rng.random_range(1000..=2000));
     let mut wavelet_coded = WaveletPixelData::new(raw_data.clone());
     let mean = wavelet_coded
         .get(MallatSubband {
@@ -36,16 +36,16 @@ fn main() {
         .unwrap()
         .mean()
         .unwrap();
-    wavelet_coded
-        .get_mut(MallatSubband {
-            stage: 0,
-            subband: WaveletSubband::LL,
-        })
-        .unwrap()
-        .map_inplace(|x| *x = *x - mean);
-    wavelet_coded.dwt_mallat(0);
+    // wavelet_coded
+    //     .get_mut(MallatSubband {
+    //         stage: 0,
+    //         subband: WaveletSubband::LL,
+    //     })
+    //     .unwrap()
+    //     .map_inplace(|x| *x = *x - mean);
+    wavelet_coded.dwt_mallat(2);
     let no_quantisation = BitplanePixelData::new(wavelet_coded.clone());
-    let dc_bitdepth = no_quantisation.dc_bitdepth_magnitude();
+    let dc_bitdepth = no_quantisation.dc_bitdepth_twos_complement();
     let ac_bitdepth = no_quantisation.ac_bitdepth_magnitude();
     let mut buf = vec![];
     let mut cursor = Cursor::new(&mut buf);
@@ -55,7 +55,7 @@ fn main() {
     let mut cursor = Cursor::new(&mut buf);
     let mut reader = BitReader::<_, BigEndian>::new(&mut cursor);
     let mut round_trip = BitplanePixelData::decode(
-        WaveletPixelData::empty((52, 20), 0),
+        WaveletPixelData::empty((52, 20), 2),
         &mut reader,
         config,
         dc_bitdepth,

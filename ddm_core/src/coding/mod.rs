@@ -8,6 +8,9 @@ pub use wavelet::WaveletPixelData;
 pub mod bitplane;
 pub use bitplane::{BitplaneConfig, BitplanePixelData};
 
+pub mod crc;
+pub use crc::{CrcReader, CrcWriter};
+
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
