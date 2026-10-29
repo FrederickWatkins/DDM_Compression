@@ -8,7 +8,6 @@ use ddm_core::coding::{
     bitplane::{
         NeighbourEncoding, Quantisation, RefinementEncoding, SignEncoding, SignificantEncoding,
     },
-    wavelet::{MallatSubband, WaveletSubband},
 };
 use duckdb::{Connection, params};
 use itertools::iproduct;

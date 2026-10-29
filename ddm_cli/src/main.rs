@@ -18,7 +18,7 @@ mod dwt_image;
 mod benchmark;
 
 fn main() -> eyre::Result<()> {
-    const MAX_FRAMES: usize = 1;
+    const MAX_FRAMES: usize = 16;
 
     install_eyre_hook()?;
 
