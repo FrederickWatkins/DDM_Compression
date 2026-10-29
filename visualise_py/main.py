@@ -3,7 +3,7 @@
 
 Usage:
     python plot_benchmarks.py results.db [--epsilon 1e-9] [--out benchmarks.html]
-                                         [--budget-db 0.25]
+                                         [--budget-db 0.25 [--budget-on max|mean]]
 
 Dependencies:
     pip install --user duckdb pandas plotly
@@ -35,22 +35,19 @@ DDM_METRICS = ["peak_power", "noise", "snr", "signal"]
 
 
 def add_metric_errors(df: pd.DataFrame) -> pd.DataFrame:
-    """Add err_<metric>_db columns and ddm_err_db (the worst of the four).
+    """Add ddm_err_db_mean and ddm_err_db_max: the worst of the four DDM metrics.
 
-    Error is |10*log10(roundtripped / reference)|, i.e. the dB change caused by
-    compression. All four are power-like quantities (SNR is a power ratio), so the
-    same 10*log10 applies. Where the ratio isn't positive and finite (zero or
-    sign-flipped values) the error is NaN/inf and the row fails any budget.
+    The benchmark stores, per metric, the per-frame error |10*log10(rt / ref)| in dB,
+    averaged over frames (err_<metric>_db_mean) and as the worst frame
+    (err_<metric>_db_max). Here the four metrics are collapsed to the worst one:
+      ddm_err_db_mean: worst metric, averaged over frames
+      ddm_err_db_max:  worst metric, in the worst frame (a per-frame guarantee)
+    NaN (an undefined error, e.g. a sign flip) is kept, so the row fails any budget.
     """
     df = df.copy()
-    errors = []
-    for metric in DDM_METRICS:
-        with np.errstate(divide="ignore", invalid="ignore"):
-            err = (10.0 * np.log10(df[f"rt_{metric}"] / df[f"ref_{metric}"])).abs()
-        df[f"err_{metric}_db"] = err
-        errors.append(err)
-    # skipna=False so an undefined metric makes the whole row fail the budget
-    df["ddm_err_db"] = pd.concat(errors, axis=1).max(axis=1, skipna=False)
+    for stat in ("mean", "max"):
+        columns = [f"err_{metric}_db_{stat}" for metric in DDM_METRICS]
+        df[f"ddm_err_db_{stat}"] = df[columns].max(axis=1, skipna=False)
     return df
 
 
@@ -78,9 +75,9 @@ def config_text(df: pd.DataFrame) -> pd.Series:
         + "<br>Size: " + df["size"].astype(str) + " B"
         + "<br>PSNR: " + df["psnr"].round(2).astype(str) + " dB"
         + "<br>MSE: " + df["mse"].map("{:.4g}".format)
-        + "<br>Worst DDM metric error: " + df["ddm_err_db"].round(3).astype(str) + " dB"
-        + "<br>RT SNR: " + df["rt_snr"].round(3).astype(str)
-        + " (ref " + df["ref_snr"].round(3).astype(str) + ")"
+        + " (worst frame " + df["mse_max"].map("{:.4g}".format) + ")"
+        + "<br>DDM error, worst metric: mean " + df["ddm_err_db_mean"].round(3).astype(str)
+        + " dB, worst frame " + df["ddm_err_db_max"].round(3).astype(str) + " dB"
     )
 
 
@@ -90,7 +87,7 @@ def print_best_lossless(df: pd.DataFrame, epsilon: float, n: int = 10) -> None:
     if lossless.empty:
         return
     print(f"\nBest {min(n, len(lossless))} lossless configs by size:\n")
-    columns = CONFIG_COLUMNS + ["size", "mse", "ddm_err_db"]
+    columns = CONFIG_COLUMNS + ["size", "mse", "mse_max", "ddm_err_db_mean", "ddm_err_db_max"]
     with pd.option_context(
         "display.max_columns", None, "display.width", 250, "display.max_colwidth", None
     ):
@@ -123,7 +120,9 @@ def pareto_front(df: pd.DataFrame) -> pd.DataFrame:
 
 def print_pareto(front: pd.DataFrame) -> None:
     print(f"\n{len(front)} Pareto-optimal configs (minimising size and MSE):\n")
-    columns = CONFIG_COLUMNS + ["size", "mse", "psnr", "ddm_err_db"]
+    columns = CONFIG_COLUMNS + [
+        "size", "mse", "mse_max", "psnr", "psnr_min", "ddm_err_db_mean", "ddm_err_db_max",
+    ]
     with pd.option_context(
         "display.max_columns", None, "display.width", 250, "display.max_colwidth", None
     ):
@@ -194,14 +193,25 @@ def main() -> None:
         help="Only keep configs where all four DDM metrics (peak power, noise, SNR, "
         "signal-only) change by at most this many dB from the original, e.g. 0.25",
     )
+    parser.add_argument(
+        "--budget-on",
+        choices=["max", "mean"],
+        default="max",
+        help="Apply --budget-db to the worst frame (max, default: a per-frame "
+        "guarantee) or to the error averaged over frames (mean)",
+    )
     args = parser.parse_args()
 
     df = add_metric_errors(load(args.db))
     if args.budget_db is not None:
         total = len(df)
+        column = f"ddm_err_db_{args.budget_on}"
         # NaN errors compare False, so undefined metrics are filtered out too
-        df = df[df["ddm_err_db"] <= args.budget_db]
-        print(f"{len(df)} of {total} configs within the {args.budget_db:g} dB DDM budget")
+        df = df[df[column] <= args.budget_db]
+        print(
+            f"{len(df)} of {total} configs within the {args.budget_db:g} dB DDM budget "
+            f"({'worst frame' if args.budget_on == 'max' else 'frame average'})"
+        )
         if df.empty:
             return
 

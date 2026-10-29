@@ -30,8 +30,56 @@ pub struct BenchmarkConfig {
 /// Adjust to match your DDM geometry.
 const NOISE_BOX_ROWS: usize = 16;
 
+/// Mean and worst case of a quantity over frames
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+pub struct Summary {
+    pub mean: f64,
+    pub max: f64,
+}
+
+/// Accumulates a [`Summary`] frame by frame.
+///
+/// NaN is sticky: if any frame's value is NaN (an undefined error), both the mean and
+/// the max come out NaN, so such a config can never slip under a budget by accident.
+#[derive(Debug, Clone, Copy)]
+struct Tracker {
+    sum: f64,
+    max: f64,
+    count: usize,
+}
+
+impl Tracker {
+    fn new() -> Self {
+        Self {
+            sum: 0.0,
+            max: f64::NEG_INFINITY,
+            count: 0,
+        }
+    }
+
+    fn push(&mut self, value: f64) {
+        self.sum += value;
+        // f64::max would silently ignore a NaN, so propagate it explicitly
+        self.max = if value.is_nan() || self.max.is_nan() {
+            f64::NAN
+        } else {
+            self.max.max(value)
+        };
+        self.count += 1;
+    }
+
+    fn summary(self) -> Summary {
+        #[expect(clippy::cast_precision_loss, reason = "Number of frames is small")]
+        let n = self.count as f64;
+        Summary {
+            mean: self.sum / n,
+            max: self.max,
+        }
+    }
+}
+
 /// Signal/noise measurements taken from a single DDM
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub struct DdmMetrics {
     /// Estimated power at the peak of the DDM (signal + noise)
     pub peak_power: f64,
@@ -73,20 +121,83 @@ impl DdmMetrics {
             signal,
         })
     }
+}
 
-    fn accumulate(&mut self, other: &Self) {
-        self.peak_power += other.peak_power;
-        self.noise += other.noise;
-        self.snr += other.snr;
-        self.signal += other.signal;
+/// Change in each DDM metric caused by compression, in dB, for a single frame
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+pub struct DdmError {
+    pub peak_power_db: f64,
+    pub noise_db: f64,
+    pub snr_db: f64,
+    pub signal_db: f64,
+}
+
+impl DdmError {
+    fn between(reference: &DdmMetrics, roundtripped: &DdmMetrics) -> Self {
+        Self {
+            peak_power_db: db_error(reference.peak_power, roundtripped.peak_power),
+            noise_db: db_error(reference.noise, roundtripped.noise),
+            snr_db: db_error(reference.snr, roundtripped.snr),
+            signal_db: db_error(reference.signal, roundtripped.signal),
+        }
+    }
+}
+
+/// `|10 * log10(roundtripped / reference)|`. All four DDM metrics are power-like (SNR is
+/// a power ratio), so the same formula applies. Identical values give exactly 0. Otherwise
+/// the error is NaN unless both are positive, so a sign flip or a zero can never look like
+/// a small error.
+#[allow(clippy::float_cmp, reason = "Exact equality is intended: lossless gives 0 dB")]
+fn db_error(reference: f64, roundtripped: f64) -> f64 {
+    if reference == roundtripped {
+        0.0
+    } else if reference > 0.0 && roundtripped > 0.0 {
+        (10.0 * (roundtripped / reference).log10()).abs()
+    } else {
+        f64::NAN
+    }
+}
+
+/// Mean and worst-frame error of each DDM metric, in dB
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+pub struct DdmErrorSummary {
+    pub peak_power_db: Summary,
+    pub noise_db: Summary,
+    pub snr_db: Summary,
+    pub signal_db: Summary,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DdmErrorTracker {
+    peak_power: Tracker,
+    noise: Tracker,
+    snr: Tracker,
+    signal: Tracker,
+}
+
+impl DdmErrorTracker {
+    fn new() -> Self {
+        Self {
+            peak_power: Tracker::new(),
+            noise: Tracker::new(),
+            snr: Tracker::new(),
+            signal: Tracker::new(),
+        }
     }
 
-    fn divided_by(self, n: f64) -> Self {
-        Self {
-            peak_power: self.peak_power / n,
-            noise: self.noise / n,
-            snr: self.snr / n,
-            signal: self.signal / n,
+    fn push(&mut self, error: &DdmError) {
+        self.peak_power.push(error.peak_power_db);
+        self.noise.push(error.noise_db);
+        self.snr.push(error.snr_db);
+        self.signal.push(error.signal_db);
+    }
+
+    fn summary(self) -> DdmErrorSummary {
+        DdmErrorSummary {
+            peak_power_db: self.peak_power.summary(),
+            noise_db: self.noise.summary(),
+            snr_db: self.snr.summary(),
+            signal_db: self.signal.summary(),
         }
     }
 }
@@ -95,13 +206,16 @@ impl DdmMetrics {
 pub struct BenchmarkResults {
     /// Mean encoded size per frame, in bytes
     pub size: usize,
-    pub mse: f64,
+    /// MSE: mean over frames, and worst frame
+    pub mse: Summary,
+    /// Square root of the mean MSE
     pub rmse: f64,
+    /// PSNR computed from the mean MSE
     pub psnr: f64,
-    /// DDM metrics of the original frames (mean over frames)
-    pub reference: DdmMetrics,
-    /// DDM metrics of the roundtripped frames (mean over frames)
-    pub roundtripped: DdmMetrics,
+    /// PSNR computed from the worst-frame MSE (the lowest PSNR of any frame)
+    pub psnr_min: f64,
+    /// DDM metric errors: mean over frames, and worst frame
+    pub ddm_error: DdmErrorSummary,
 }
 
 const CREATE_TABLE: &str = "
@@ -117,22 +231,25 @@ CREATE TABLE IF NOT EXISTS benchmarks (
     significant_encoding VARCHAR,
     neighbour_encoding  VARCHAR,
     refinement_encoding VARCHAR,
-    size                BIGINT,
-    mse                 DOUBLE,
-    rmse                DOUBLE,
-    psnr                DOUBLE,
-    ref_peak_power      DOUBLE,    -- DDM metrics of original frames
-    ref_noise           DOUBLE,
-    ref_snr             DOUBLE,
-    ref_signal          DOUBLE,
-    rt_peak_power       DOUBLE,    -- DDM metrics of roundtripped frames
-    rt_noise            DOUBLE,
-    rt_snr              DOUBLE,
-    rt_signal           DOUBLE
+    size                BIGINT,    -- mean bytes per frame
+    mse                 DOUBLE,    -- mean over frames
+    mse_max             DOUBLE,    -- worst frame
+    rmse                DOUBLE,    -- sqrt of mean mse
+    psnr                DOUBLE,    -- from mean mse
+    psnr_min            DOUBLE,    -- from worst-frame mse
+    -- DDM metric errors in dB, |10*log10(roundtripped/reference)| per frame
+    err_peak_power_db_mean DOUBLE,
+    err_peak_power_db_max  DOUBLE,
+    err_noise_db_mean      DOUBLE,
+    err_noise_db_max       DOUBLE,
+    err_snr_db_mean        DOUBLE,
+    err_snr_db_max         DOUBLE,
+    err_signal_db_mean     DOUBLE,
+    err_signal_db_max      DOUBLE
 )";
 
 /// Number of columns in the `benchmarks` table
-const COLUMN_COUNT: usize = 23;
+const COLUMN_COUNT: usize = 25;
 
 fn insert_sql() -> String {
     format!(
@@ -162,12 +279,19 @@ pub fn benchmark_all(test_frames: &[Array2<i32>], conn: &mut Connection) -> eyre
     // 99.9 percentile pixel value, used as the peak value for PSNR
     let p999 = percentile_999(test_frames)?;
 
+    // The reference DDM metrics don't depend on the config, so measure them once.
+    // This also fails fast if the frames are too small for the noise box.
+    let references = test_frames
+        .iter()
+        .map(DdmMetrics::measure)
+        .collect::<eyre::Result<Vec<_>>>()?;
+
     conn.execute_batch(CREATE_TABLE)?;
     conn.execute_batch("BEGIN TRANSACTION")?;
     let mut insert = conn.prepare(&insert_sql())?;
 
     for config in all_configs() {
-        let results = match benchmark(test_frames, config, p999) {
+        let results = match benchmark(test_frames, &references, config, p999) {
             Ok(results) => results,
             Err(err) => {
                 // Don't let one bad config kill a long sweep
@@ -180,6 +304,7 @@ pub fn benchmark_all(test_frames: &[Array2<i32>], conn: &mut Connection) -> eyre
         let (quant_kind, quant_bits) = split_quantisation(bp.quantisation);
         let (dc_kind, dc_bypass) = split_sign(bp.dc_encoding);
         let (ac_kind, ac_bypass) = split_sign(bp.ac_encoding);
+        let ddm = results.ddm_error;
         #[expect(
             clippy::cast_possible_wrap,
             reason = "None of these values are anywhere near i64::MAX"
@@ -197,17 +322,19 @@ pub fn benchmark_all(test_frames: &[Array2<i32>], conn: &mut Connection) -> eyre
             format!("{:?}", bp.neighbour_encoding),
             format!("{:?}", bp.refinement_encoding),
             results.size as i64,
-            results.mse,
+            results.mse.mean,
+            results.mse.max,
             results.rmse,
             results.psnr,
-            results.reference.peak_power,
-            results.reference.noise,
-            results.reference.snr,
-            results.reference.signal,
-            results.roundtripped.peak_power,
-            results.roundtripped.noise,
-            results.roundtripped.snr,
-            results.roundtripped.signal,
+            results.psnr_min,
+            ddm.peak_power_db.mean,
+            ddm.peak_power_db.max,
+            ddm.noise_db.mean,
+            ddm.noise_db.max,
+            ddm.snr_db.mean,
+            ddm.snr_db.max,
+            ddm.signal_db.mean,
+            ddm.signal_db.max,
         ])?;
     }
 
@@ -235,42 +362,46 @@ fn percentile_999(frames: &[Array2<i32>]) -> eyre::Result<i32> {
     Ok(*value)
 }
 
+/// PSNR in dB for a given MSE and peak value. A zero MSE gives infinity.
+fn psnr(peak: i32, mse: f64) -> f64 {
+    20.0 * (f64::from(peak) / mse.sqrt()).log10()
+}
+
+/// Benchmark one config over all frames. `references` are the pre-measured DDM metrics of
+/// `test_frames`, in the same order.
 fn benchmark(
     test_frames: &[Array2<i32>],
+    references: &[DdmMetrics],
     config: BenchmarkConfig,
     p999: i32,
 ) -> eyre::Result<BenchmarkResults> {
     eyre::ensure!(!test_frames.is_empty(), "No test frames");
+    eyre::ensure!(
+        test_frames.len() == references.len(),
+        "Got {} reference metrics for {} frames",
+        references.len(),
+        test_frames.len()
+    );
 
     let mut size = 0;
-    let mut mse: f64 = 0.0;
-    let mut reference = DdmMetrics::default();
-    let mut roundtripped = DdmMetrics::default();
-    for frame in test_frames {
-        let result = roundtrip_frame(frame, config)?;
+    let mut mse = Tracker::new();
+    let mut ddm_error = DdmErrorTracker::new();
+    for (frame, reference) in test_frames.iter().zip(references) {
+        let result = roundtrip_frame(frame, reference, config)?;
         size += result.size;
-        mse += result.mse;
-        reference.accumulate(&result.reference);
-        roundtripped.accumulate(&result.roundtripped);
+        mse.push(result.mse);
+        ddm_error.push(&result.ddm_error);
     }
     let size = size / test_frames.len();
-    #[expect(clippy::cast_precision_loss, reason = "Number of frames is small")]
-    let n_frames = test_frames.len() as f64;
-    let mse = mse / n_frames;
-    // Per-frame metrics are averaged over frames (including SNR)
-    let reference = reference.divided_by(n_frames);
-    let roundtripped = roundtripped.divided_by(n_frames);
-    let rmse = mse.sqrt();
-    // rmse == 0 (lossless) gives psnr = inf, which DuckDB stores fine
-    let psnr = 20.0 * (f64::from(p999) / rmse).log10();
+    let mse = mse.summary();
 
     Ok(BenchmarkResults {
         size,
         mse,
-        rmse,
-        psnr,
-        reference,
-        roundtripped,
+        rmse: mse.mean.sqrt(),
+        psnr: psnr(p999, mse.mean),
+        psnr_min: psnr(p999, mse.max),
+        ddm_error: ddm_error.summary(),
     })
 }
 
@@ -279,14 +410,16 @@ struct FrameResult {
     /// Encoded size in bytes
     size: usize,
     mse: f64,
-    /// DDM metrics of the original frame
-    reference: DdmMetrics,
-    /// DDM metrics of the roundtripped frame
-    roundtripped: DdmMetrics,
+    /// Error in each DDM metric versus the original frame
+    ddm_error: DdmError,
 }
 
-/// Encode and decode one frame, measuring size, mse and DDM metrics
-fn roundtrip_frame(frame: &Array2<i32>, config: BenchmarkConfig) -> eyre::Result<FrameResult> {
+/// Encode and decode one frame, measuring size, mse and DDM metric errors
+fn roundtrip_frame(
+    frame: &Array2<i32>,
+    reference: &DdmMetrics,
+    config: BenchmarkConfig,
+) -> eyre::Result<FrameResult> {
     let mut owned_frame = frame.clone();
     // Remember the mean so it can be restored after decoding
     let mean = if config.dc_adjust {
@@ -311,6 +444,8 @@ fn roundtrip_frame(frame: &Array2<i32>, config: BenchmarkConfig) -> eyre::Result
         depths
     };
     let size = buf.len();
+
+    // Decode into a fresh, empty container so the decoder can't see any encoder data
     let wavelet_pixels = WaveletPixelData::empty(frame.dim(), u8::try_from(config.wavelet_stages)?);
     let mut bitreader = BitReader::<_, BigEndian>::new(Cursor::new(buf.as_slice()));
     let bitplane_pixels = BitplanePixelData::decode(
@@ -332,15 +467,13 @@ fn roundtrip_frame(frame: &Array2<i32>, config: BenchmarkConfig) -> eyre::Result
     }
 
     let mse = compare_frames(frame, &roundtripped);
-    // Measured on the original (not DC-adjusted) frame and the restored roundtrip
-    let reference = DdmMetrics::measure(frame)?;
-    let roundtripped = DdmMetrics::measure(&roundtripped)?;
+    let measured = DdmMetrics::measure(&roundtripped)?;
+    let ddm_error = DdmError::between(reference, &measured);
 
     Ok(FrameResult {
         size,
         mse,
-        reference,
-        roundtripped,
+        ddm_error,
     })
 }
 

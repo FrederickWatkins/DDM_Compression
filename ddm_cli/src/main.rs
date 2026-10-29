@@ -1,8 +1,7 @@
 //! DDM CLI tools
 #![allow(dead_code, reason = "Might use in future")]
 use std::{
-    env,
-    io::{BufReader, ErrorKind::UnexpectedEof},
+    env, io::{BufReader, ErrorKind::UnexpectedEof, Seek},
 };
 
 use binrw::{BinRead as _, Endian};
@@ -18,7 +17,7 @@ mod dwt_image;
 mod benchmark;
 
 fn main() -> eyre::Result<()> {
-    const MAX_FRAMES: usize = 16;
+    const MAX_FRAMES: usize = 128;
 
     install_eyre_hook()?;
 
@@ -47,6 +46,7 @@ fn main() -> eyre::Result<()> {
             Err(e) => return Err(e.into()),
         }
     }
+    println!("Size: {}", reader.stream_position()?);
 
     eyre::ensure!(!frames.is_empty(), "No MP00 frames found in input");
     eprintln!("Decoded {} frames, benchmarking...", frames.len());
